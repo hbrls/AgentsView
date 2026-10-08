@@ -1,3 +1,4 @@
 *
 !.gitignore
 !genai_prices.json.gz
+!litellm_snapshot.json.gz
