@@ -32,9 +32,24 @@ func TestListSessionsSourceComparisonMetadata(t *testing.T) {
 			require.NotNil(t, s.FilePath)
 			assert.Equal(t, "/archive/session.jsonl", *s.FilePath)
 		} else {
+			require.NotNil(t, s.FilePath)
+			assert.Equal(t, "/archive/session.jsonl", *s.FilePath)
 			assert.Nil(t, s.FileSize)
 			assert.Nil(t, s.LocalModifiedAt)
-			assert.Nil(t, s.FilePath)
 		}
 	}
+}
+
+func TestGetSessionIncludesSourcePath(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "codex:detail", "app", func(s *Session) {
+		s.Cwd = "/workspace/app"
+		s.FilePath = new("/archive/session.jsonl")
+	})
+
+	session, err := d.GetSession(t.Context(), "codex:detail")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	require.NotNil(t, session.FilePath)
+	assert.Equal(t, "/archive/session.jsonl", *session.FilePath)
 }

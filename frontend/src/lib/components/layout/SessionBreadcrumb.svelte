@@ -670,13 +670,28 @@
     }
   }
 
-  async function handleCopyFilePath() {
+  async function handleCopyDirectoryPath() {
     showOpenMenu = false;
     if (!sessionDir) {
       showFeedback(m.session_breadcrumb_no_path_available(), "error");
       return;
     }
     const ok = await copyToClipboard(sessionDir);
+    showFeedback(
+      ok
+        ? m.session_breadcrumb_path_copied()
+        : m.session_breadcrumb_failed(),
+      ok ? "success" : "error",
+    );
+  }
+
+  async function handleCopySourceFilePath() {
+    showOpenMenu = false;
+    if (!session?.file_path) {
+      showFeedback(m.session_breadcrumb_no_path_available(), "error");
+      return;
+    }
+    const ok = await copyToClipboard(session.file_path);
     showFeedback(
       ok
         ? m.session_breadcrumb_path_copied()
@@ -1024,11 +1039,17 @@
                 </button>
               {/if}
               {#if isLocal}
-              <button class="open-menu-item" onclick={handleCopyFilePath}>
+              <button class="open-menu-item" onclick={handleCopyDirectoryPath}>
+                <span class="open-menu-num">
+                  <FolderIcon size="10" strokeWidth="2" aria-hidden="true" />
+                </span>
+                <span class="open-menu-name">{m.session_breadcrumb_copy_directory_path()}</span>
+              </button>
+              <button class="open-menu-item" onclick={handleCopySourceFilePath}>
                 <span class="open-menu-num">
                   <FileTextIcon size="10" strokeWidth="2" aria-hidden="true" />
                 </span>
-                <span class="open-menu-name">{m.session_breadcrumb_copy_directory_path()}</span>
+                <span class="open-menu-name">{m.header_actions_copy_source_path()}</span>
               </button>
               {#if editorOpeners.length > 0 || fileOpeners.length > 0}
                 <div class="open-menu-divider"></div>

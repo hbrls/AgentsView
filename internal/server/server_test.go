@@ -1544,7 +1544,7 @@ func TestListSessions_WithData(t *testing.T) {
 	}
 }
 
-func TestListSessions_IncludesSourcePathOnlyWhenRequested(t *testing.T) {
+func TestListSessions_IncludesSourcePath(t *testing.T) {
 	te := setup(t)
 	sourcePath := filepath.Join(t.TempDir(), "session.jsonl")
 	te.seedSession(t, "s1", "my-app", 5, func(s *db.Session) {
@@ -1564,7 +1564,10 @@ func TestListSessions_IncludesSourcePathOnlyWhenRequested(t *testing.T) {
 	}
 
 	withoutSource := decodeSession(t, "/api/v1/sessions")
-	assert.NotContains(t, withoutSource, "file_path")
+	var pathWithoutSource string
+	require.Contains(t, withoutSource, "file_path")
+	require.NoError(t, json.Unmarshal(withoutSource["file_path"], &pathWithoutSource))
+	assert.Equal(t, sourcePath, pathWithoutSource)
 
 	withSource := decodeSession(t, "/api/v1/sessions?include_source=true")
 	require.Contains(t, withSource, "file_path")
@@ -1909,7 +1912,10 @@ func TestContentSearchDateFilterUsesRequestedTimezone(t *testing.T) {
 
 func TestGetSession_Found(t *testing.T) {
 	te := setup(t)
-	te.seedSession(t, "s1", "my-app", 5)
+	te.seedSession(t, "s1", "my-app", 5, func(s *db.Session) {
+		s.Cwd = "c:/workspace/app"
+		s.FilePath = new("C:/history/my-app/session/index.json")
+	})
 
 	w := te.get(t, "/api/v1/sessions/s1")
 	assertStatus(t, w, http.StatusOK)
@@ -1918,6 +1924,8 @@ func TestGetSession_Found(t *testing.T) {
 	if resp.ID != "s1" {
 		require.FailNowf(t, "test failed", "expected id=s1, got %v", resp.ID)
 	}
+	require.NotNil(t, resp.FilePath)
+	assert.Equal(t, "C:/history/my-app/session/index.json", *resp.FilePath)
 }
 
 func TestGetSession_RoundTripsReservedIDCharacters(t *testing.T) {

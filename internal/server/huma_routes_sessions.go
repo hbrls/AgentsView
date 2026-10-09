@@ -90,7 +90,7 @@ type sessionFilterInput struct {
 	IncludeOneShot   bool              `query:"include_one_shot" doc:"Include one-shot sessions"`
 	IncludeAutomated bool              `query:"include_automated" doc:"Include automated sessions"`
 	IncludeChildren  bool              `query:"include_children" doc:"Include child sessions"`
-	IncludeSource    bool              `query:"include_source" doc:"Include available source file path, size, and archive-row update time on /sessions; accepted but ignored by /sessions/sidebar-index"`
+	IncludeSource    bool              `query:"include_source" doc:"Include source file comparison metadata (size and archive-row update time) on /sessions; accepted but ignored by /sessions/sidebar-index"`
 	Outcome          string            `query:"outcome" doc:"Filter by detected outcome"`
 	HealthGrade      string            `query:"health_grade" doc:"Filter by health grade"`
 	Cursor           string            `query:"cursor" doc:"Opaque pagination cursor"`

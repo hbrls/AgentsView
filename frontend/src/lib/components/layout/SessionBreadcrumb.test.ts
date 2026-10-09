@@ -495,6 +495,7 @@ describe("SessionBreadcrumb", () => {
     expect(document.body.textContent).toContain("默认终端");
     expect(document.body.textContent).toContain("复制命令");
     expect(document.body.textContent).toContain("复制目录路径");
+    expect(document.body.textContent).toContain("复制源文件路径");
     expect(document.body.textContent).toContain("打开方式");
     expect(document.body.textContent).toContain("VS Code");
 
@@ -568,6 +569,40 @@ describe("SessionBreadcrumb", () => {
       expect(feedback?.classList.contains("has-feedback-success")).toBe(false);
       expect(feedback?.querySelector(".lucide-triangle-alert")).toBeTruthy();
       expect(feedback?.querySelector(".lucide-check")).toBeNull();
+    });
+
+    unmount(component);
+  });
+
+  it("copies the session source file path from the breadcrumb menu", async () => {
+    const filePath = "/tmp/project/session.jsonl";
+    sessionsService.getApiV1SessionsByIdDirectory.mockResolvedValue({
+      path: "/tmp/project",
+    });
+
+    const component = mount(SessionBreadcrumb, {
+      target: document.body,
+      props: {
+        session: makeSession("claude", { file_path: filePath }),
+        onBack: () => {},
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(document.querySelector(".resume-btn")).toBeTruthy();
+      expect(sessionsService.getApiV1SessionsByIdDirectory).toHaveBeenCalled();
+    });
+    document.querySelector<HTMLButtonElement>(".resume-btn")?.click();
+    await tick();
+
+    const copySourcePathButton = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(".open-menu-item"),
+    ).find((button) => button.textContent?.includes("Copy source file path"));
+    expect(copySourcePathButton).toBeTruthy();
+    copySourcePathButton!.click();
+
+    await vi.waitFor(() => {
+      expect(copyToClipboard).toHaveBeenCalledWith(filePath);
     });
 
     unmount(component);
@@ -1549,6 +1584,7 @@ describe("SessionBreadcrumb", () => {
         "Open in Claude Code",
         "Copy command",
         "Copy directory path",
+        "Copy source file path",
         "VS Code",
         "Finder",
         "Claude Desktop",

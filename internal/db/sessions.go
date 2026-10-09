@@ -69,7 +69,7 @@ const sessionBaseCols = `id, project, machine, agent,
 	missing_verification_count, duplicate_prompt_count,
 	no_code_context_count, runaway_tool_loop_count,
 	data_version,
-	cwd, git_branch, source_session_id, source_version,
+	cwd, file_path, git_branch, source_session_id, source_version,
 	transcript_fidelity,
 	parser_malformed_lines, is_truncated,
 	deleted_at, termination_status, transcript_revision, created_at,
@@ -167,8 +167,9 @@ func scanSessionRow(rs rowScanner) (Session, error) {
 	return scanSessionRowWithSource(rs, false)
 }
 
-// scanSessionRowWithSource scans sessionBaseCols and an optional trailing
-// source metadata into a Session.
+// scanSessionRowWithSource scans sessionBaseCols and optional trailing source
+// metadata into a Session. The source path is part of the base projection;
+// includeSource only controls the volatile comparison metadata.
 func scanSessionRowWithSource(rs rowScanner, includeSource bool) (Session, error) {
 	var s Session
 	targets := []any{
@@ -196,7 +197,7 @@ func scanSessionRowWithSource(rs rowScanner, includeSource bool) (Session, error
 		&s.MissingVerificationCount, &s.DuplicatePromptCount,
 		&s.NoCodeContextCount, &s.RunawayToolLoopCount,
 		&s.DataVersion,
-		&s.Cwd, &s.GitBranch,
+		&s.Cwd, &s.FilePath, &s.GitBranch,
 		&s.SourceSessionID, &s.SourceVersion,
 		&s.TranscriptFidelity,
 		&s.ParserMalformedLines, &s.IsTruncated,
@@ -204,7 +205,7 @@ func scanSessionRowWithSource(rs rowScanner, includeSource bool) (Session, error
 		&s.TranscriptRevision, &s.CreatedAt, &s.ProjectAssigned,
 	}
 	if includeSource {
-		targets = append(targets, &s.FilePath, &s.FileSize, &s.LocalModifiedAt)
+		targets = append(targets, &s.FileSize, &s.LocalModifiedAt)
 	}
 	err := rs.Scan(targets...)
 	return s, err
@@ -571,7 +572,7 @@ type SessionFilter struct {
 	IncludeChildren    bool     // include subagent sessions (for sidebar grouping)
 	IncludeEmpty       bool     // include zero-message sessions for project mapping
 	IncludeOrphans     bool     // promote orphan child rows to sidebar roots
-	IncludeSource      bool     // include the session source file path in list rows
+	IncludeSource      bool     // include source comparison metadata in list rows
 	Outcome            []string // filter by outcome values
 	HealthGrade        []string // filter by health grade values
 	MinToolFailures    *int     // minimum tool_failure_signal_count
@@ -741,7 +742,7 @@ func (db *DB) ListSessions(
 
 	columns := sessionBaseCols
 	if f.IncludeSource {
-		columns += ", file_path, file_size, local_modified_at"
+		columns += ", file_size, local_modified_at"
 	}
 	query := "SELECT " + columns +
 		" FROM sessions WHERE " + cursorWhere + " " +
