@@ -44,72 +44,8 @@ func SessionUsageWithSubagents(
 		return nil, err
 	}
 	return sessionUsageWithDescendants(
-		ctx, store, rootID, descendants, includeBreakdown, false,
+		ctx, store, rootID, descendants, includeBreakdown,
 	)
-}
-
-// SessionUsageWithRequiredSubagents applies the canonical delegated-usage
-// rollup while requiring each supplied provider source to contribute. The
-// caller must prove those IDs from provider-owned evidence, such as Claude's
-// subagent directory. This keeps incomplete producer link metadata from
-// dropping billed child usage without weakening ordinary archive traversal.
-func SessionUsageWithRequiredSubagents(
-	ctx context.Context,
-	store db.Store,
-	rootID string,
-	requiredIDs []string,
-	includeBreakdown bool,
-) (*db.SessionUsage, []db.Session, error) {
-	descendants, err := delegatedDescendants(ctx, store, rootID)
-	if err != nil {
-		return nil, nil, err
-	}
-	included := make(map[string]struct{}, len(descendants)+len(requiredIDs))
-	for _, descendant := range descendants {
-		if err := ctx.Err(); err != nil {
-			return nil, nil, err
-		}
-		included[descendant.ID] = struct{}{}
-	}
-	for _, id := range requiredIDs {
-		if err := ctx.Err(); err != nil {
-			return nil, nil, err
-		}
-		if id == "" || id == rootID {
-			return nil, nil, fmt.Errorf("invalid required subagent session %q", id)
-		}
-		if _, ok := included[id]; !ok {
-			session, err := store.GetSession(ctx, id)
-			if err != nil {
-				return nil, nil, err
-			}
-			if session == nil {
-				return nil, nil, fmt.Errorf(
-					"required subagent session %q was not ingested", id)
-			}
-			session.RelationshipType = "subagent"
-			descendants = append(descendants, *session)
-			included[id] = struct{}{}
-		}
-		nested, err := delegatedDescendantsFrom(ctx, store, id, true)
-		if err != nil {
-			return nil, nil, err
-		}
-		for _, descendant := range nested {
-			if err := ctx.Err(); err != nil {
-				return nil, nil, err
-			}
-			if _, ok := included[descendant.ID]; ok {
-				continue
-			}
-			descendants = append(descendants, descendant)
-			included[descendant.ID] = struct{}{}
-		}
-	}
-	usage, err := sessionUsageWithDescendants(
-		ctx, store, rootID, descendants, includeBreakdown, true,
-	)
-	return usage, descendants, err
 }
 
 func sessionUsageWithDescendants(
@@ -118,13 +54,12 @@ func sessionUsageWithDescendants(
 	rootID string,
 	descendants []db.Session,
 	includeBreakdown bool,
-	requireComplete bool,
 ) (*db.SessionUsage, error) {
 	root, err := store.GetSessionUsage(ctx, rootID, includeBreakdown)
 	if err != nil || root == nil {
 		return nil, err
 	}
-	if len(descendants) == 0 && !requireComplete {
+	if len(descendants) == 0 {
 		root.TokenBreakdownComplete =
 			!sessionHasPositiveTokens(root.TotalOutputTokens, root.PeakContextTokens) ||
 				root.BreakdownCount > 0
@@ -163,16 +98,6 @@ func sessionUsageWithDescendants(
 	tokenExpectations[rootID] = sessionTokenExpectationFromUsage(root)
 	for _, descendant := range descendants {
 		tokenExpectations[descendant.ID] = sessionTokenExpectationFromSession(descendant)
-		if !requireComplete {
-			continue
-		}
-		ownUsage, usageErr := store.GetSessionUsage(ctx, descendant.ID, false)
-		if usageErr != nil {
-			return nil, usageErr
-		}
-		if ownUsage != nil {
-			tokenExpectations[descendant.ID] = sessionTokenExpectationFromUsage(ownUsage)
-		}
 	}
 	combined, err := combineSubagentUsageFromRows(
 		ctx, rootID, root, rootStoredOutputTokens, descendants, rowSet.Rows,
@@ -273,46 +198,6 @@ func sessionUsageIDsContext(
 	return ids, nil
 }
 
-// SessionUsageTokenTotals projects a canonical session-usage result onto the
-// repository's aggregate UsageTotals token fields. complete is false when the
-// canonical breakdown rows do not cover all stored output or peak-context
-// tokens, because the input and cache categories then describe a narrower set.
-func SessionUsageTokenTotals(
-	ctx context.Context, usage *db.SessionUsage,
-) (totals db.UsageTotals, complete bool, err error) {
-	if err := ctx.Err(); err != nil {
-		return db.UsageTotals{}, false, err
-	}
-	if usage == nil || !usage.HasTokenData {
-		return db.UsageTotals{}, false, nil
-	}
-	totals.OutputTokens = usage.TotalOutputTokens
-	if usage.BreakdownCount == 0 {
-		return totals, false, nil
-	}
-	materializedBreakdownComplete := len(usage.Breakdown) == usage.BreakdownCount
-	breakdownOutputTokens := 0
-	breakdownPeakContextTokens := 0
-	for _, row := range usage.Breakdown {
-		if err := ctx.Err(); err != nil {
-			return db.UsageTotals{}, false, err
-		}
-		totals.InputTokens += row.InputTokens
-		breakdownOutputTokens += row.OutputTokens
-		totals.CacheCreationTokens += row.CacheCreationInputTokens
-		totals.CacheReadTokens += row.CacheReadInputTokens
-		rowContextTokens := row.InputTokens + row.CacheCreationInputTokens +
-			row.CacheReadInputTokens
-		if rowContextTokens > breakdownPeakContextTokens {
-			breakdownPeakContextTokens = rowContextTokens
-		}
-	}
-	complete = usage.TokenBreakdownComplete && materializedBreakdownComplete &&
-		breakdownOutputTokens == usage.TotalOutputTokens &&
-		breakdownPeakContextTokens >= usage.PeakContextTokens
-	return totals, complete, nil
-}
-
 // combineSubagentUsageFromRows builds the combined result from one deduped,
 // globally ordered usage-row set. rootID is the id the rows were queried
 // under, which is what decides whether a row belongs to the parent.
@@ -328,7 +213,6 @@ func combineSubagentUsageFromRows(
 	canonicalTokenCoverageBySession map[string]activity.SessionTokenCoverage,
 	tokenExpectations map[string]sessionTokenExpectation,
 	includeBreakdown bool,
-	requireComplete bool,
 ) (*db.SessionUsage, error) {
 	out, err := newCombinedSessionUsage(ctx, root, descendants)
 	if err != nil {
@@ -356,12 +240,12 @@ func combineSubagentUsageFromRows(
 		out.HasTokenData = true
 	}
 	var sessionCostCovered bool
-	out.HasTokenData, sessionCostCovered, out.TokenBreakdownComplete, err = combinedSessionCoverage(
-		ctx, rootID, out.HasTokenData, root.HasTokenData, root.HasCost,
+	sessionCostCovered, out.TokenBreakdownComplete, err = combinedSessionCoverage(
+		ctx, rootID,
 		rootStoredOutputTokens > 0 || root.PeakContextTokens > 0,
 		descendants, combined.usageRowsBySession,
 		discardedContributingSessions, canonicalTokenCoverageBySession,
-		tokenExpectations, requireComplete)
+		tokenExpectations)
 	if err != nil {
 		return nil, err
 	}
@@ -386,17 +270,13 @@ func combineSubagentUsageFromRows(
 func combinedSessionCoverage(
 	ctx context.Context,
 	rootID string,
-	baselineTokenData bool,
-	rootHasTokenData bool,
-	rootHasCost bool,
 	rootHasPositiveTokens bool,
 	descendants []db.Session,
 	usageRowsBySession map[string]struct{},
 	discardedSessions map[string]struct{},
 	canonicalTokenCoverageBySession map[string]activity.SessionTokenCoverage,
 	tokenExpectations map[string]sessionTokenExpectation,
-	requireComplete bool,
-) (tokenCovered bool, costCovered bool, breakdownCovered bool, err error) {
+) (costCovered bool, breakdownCovered bool, err error) {
 	hasRows := func(id string) bool {
 		if _, ok := usageRowsBySession[id]; ok {
 			return true
@@ -414,34 +294,21 @@ func combinedSessionCoverage(
 			coverage.PeakContextTokens >= expected.peakContextTokens
 	}
 	rootHasRows := hasRows(rootID)
-	tokenCovered = baselineTokenData
 	costCovered = !rootHasPositiveTokens || rootHasRows
 	breakdownCovered = hasCategoryCoverage(rootID)
-	if requireComplete {
-		tokenCovered = rootHasTokenData || rootHasRows
-		costCovered = rootHasCost || rootHasRows ||
-			(rootHasTokenData && !rootHasPositiveTokens)
-	}
 	for _, descendant := range descendants {
 		if err := ctx.Err(); err != nil {
-			return false, false, false, err
+			return false, false, err
 		}
 		sessionHasRows := hasRows(descendant.ID)
-		hasTokenData := descendant.HasTotalOutputTokens ||
-			descendant.HasPeakContextTokens
 		hasPositiveTokens := descendant.TotalOutputTokens > 0 ||
 			descendant.PeakContextTokens > 0
 		if hasPositiveTokens && !sessionHasRows {
 			costCovered = false
 		}
 		breakdownCovered = breakdownCovered && hasCategoryCoverage(descendant.ID)
-		if requireComplete {
-			tokenCovered = tokenCovered && (hasTokenData || sessionHasRows)
-			costCovered = costCovered &&
-				(sessionHasRows || (hasTokenData && !hasPositiveTokens))
-		}
 	}
-	return tokenCovered, costCovered, breakdownCovered, nil
+	return costCovered, breakdownCovered, nil
 }
 
 type sessionTokenExpectation struct {
@@ -602,7 +469,6 @@ func combineSubagentUsageFromSessions(
 	root *db.SessionUsage,
 	descendants []db.Session,
 	includeBreakdown bool,
-	requireComplete bool,
 ) (*db.SessionUsage, error) {
 	out, err := newCombinedSessionUsage(ctx, root, descendants)
 	if err != nil {
@@ -612,8 +478,6 @@ func combineSubagentUsageFromSessions(
 	if err := combined.add(root, ""); err != nil {
 		return nil, err
 	}
-	allSessionsHaveTokens := root.HasTokenData
-	allSessionsHaveCost := root.HasCost
 	breakdownComplete := !sessionHasPositiveTokens(
 		root.TotalOutputTokens, root.PeakContextTokens) || root.BreakdownCount > 0
 	for _, descendant := range descendants {
@@ -624,12 +488,6 @@ func combineSubagentUsageFromSessions(
 			ctx, descendant.ID, includeBreakdown)
 		if err != nil {
 			return nil, err
-		}
-		if usage == nil || !usage.HasTokenData {
-			allSessionsHaveTokens = false
-		}
-		if usage == nil || !usage.HasCost {
-			allSessionsHaveCost = false
 		}
 		if sessionHasPositiveTokens(
 			descendant.TotalOutputTokens, descendant.PeakContextTokens,
@@ -642,16 +500,12 @@ func combineSubagentUsageFromSessions(
 	}
 	out.Breakdown = combined.breakdown
 	out.TokenBreakdownComplete = breakdownComplete
-	if requireComplete {
-		out.HasTokenData = allSessionsHaveTokens
-	}
 	out.Models, err = sortedKeys(ctx, combined.models)
 	if err != nil {
 		return nil, err
 	}
 	out.HasCost = combined.contributing && combined.allPriced &&
-		len(combined.unpriced) == 0 &&
-		(!requireComplete || allSessionsHaveCost)
+		len(combined.unpriced) == 0
 	if out.HasCost {
 		out.Cost = combined.cost
 		out.CostSource = export.CombinedCostSource(
