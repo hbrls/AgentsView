@@ -106,7 +106,7 @@ func usageMessage(
 	return msg
 }
 
-func TestSessionUsageWithRequiredSubagentsRequiresPerSessionContextCoverage(
+func TestSessionUsageWithSubagentsRequiresPerSessionContextCoverage(
 	t *testing.T,
 ) {
 	d := dbtest.OpenTestDB(t)
@@ -138,14 +138,12 @@ func TestSessionUsageWithRequiredSubagentsRequiresPerSessionContextCoverage(
 		usageMessage(subagentChildAID, 0, "10:01:00", "m-child", 0, 10),
 	)
 
-	got, _, err := service.SessionUsageWithRequiredSubagents(
-		ctx, d, subagentParentID, []string{subagentChildAID}, true)
+	got, err := service.SessionUsageWithSubagents(
+		ctx, d, subagentParentID, true)
 	require.NoError(t, err)
 	require.NotNil(t, got)
 
-	_, complete, err := service.SessionUsageTokenTotals(ctx, got)
-	require.NoError(t, err)
-	assert.False(t, complete,
+	assert.False(t, got.TokenBreakdownComplete,
 		"the parent's context must not cover the child's missing context categories")
 	assert.False(t, got.HasCost,
 		"computed cost must not omit the child's uncovered context categories")
@@ -375,8 +373,7 @@ func TestSessionUsageWithSubagentsMarksRowlessContextIncomplete(t *testing.T) {
 		usageMessage(parentID, 0, "10:00:00", "m-priced", 1000, 500),
 	)
 
-	got, _, err := service.SessionUsageWithRequiredSubagents(
-		ctx, d, parentID, []string{childID}, true)
+	got, err := service.SessionUsageWithSubagents(ctx, d, parentID, true)
 	require.NoError(t, err)
 	require.NotNil(t, got)
 
@@ -387,11 +384,8 @@ func TestSessionUsageWithSubagentsMarksRowlessContextIncomplete(t *testing.T) {
 	assert.True(t, got.HasTokenData)
 	assert.False(t, got.HasCost,
 		"priced parent rows do not cover a rowless subagent's context tokens")
-	totals, complete, err := service.SessionUsageTokenTotals(ctx, got)
-	require.NoError(t, err)
-	assert.False(t, complete,
-		"parent rows do not prove the required subagent's input and cache usage")
-	assert.Equal(t, 1_000, totals.InputTokens)
+	assert.False(t, got.TokenBreakdownComplete,
+		"parent rows do not prove the subagent's input and cache usage")
 }
 
 func TestSessionUsageWithSubagentsAllowsExplicitZeroValuedSubagent(t *testing.T) {
