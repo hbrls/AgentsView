@@ -3,7 +3,6 @@ package skills
 import (
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -18,18 +17,6 @@ func memoryPluginRoot(t *testing.T) string {
 	require.True(t, ok)
 	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..",
 		"plugins", "agentsview-memory"))
-}
-
-func TestMemoryPluginHookMissingBinaryDoesNotBlockSession(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("POSIX sh script behavior test")
-	}
-	cmd := exec.CommandContext(t.Context(), "/bin/sh", filepath.Join(
-		memoryPluginRoot(t), "scripts", "session-start.sh"))
-	cmd.Env = []string{"PATH="}
-	output, err := cmd.CombinedOutput()
-	require.NoError(t, err)
-	assert.Contains(t, string(output), "agentsview is not installed")
 }
 
 func TestMemoryPluginGeneratedArtifactsAreCurrent(t *testing.T) {
@@ -47,7 +34,6 @@ func TestMemoryPluginManifestsSelectFocusedMCP(t *testing.T) {
 	root := memoryPluginRoot(t)
 	for _, relative := range []string{
 		".claude-plugin/plugin.json", ".codex-plugin/plugin.json", ".mcp.json",
-		"hooks/hooks.json",
 	} {
 		body, err := os.ReadFile(filepath.Join(root, relative))
 		require.NoError(t, err)

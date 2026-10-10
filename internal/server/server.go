@@ -186,11 +186,6 @@ type Server struct {
 	// with the worker-backed build-and-swap instead of an in-process resync.
 	localResyncRunner LocalResyncRunner
 
-	// memoryRefreshRequest queues a background reconciliation for the local
-	// conversation-memory lifecycle hook. It must return immediately and
-	// coalesce duplicate requests outside the HTTP handler.
-	memoryRefreshRequest func()
-
 	// localCompactRunner, when set, backs archive compaction with the daemon's
 	// maintenance barrier instead of allowing a CLI to bypass the writer.
 	localCompactRunner LocalCompactRunner
@@ -645,12 +640,6 @@ func WithLocalResyncRunner(r LocalResyncRunner) Option {
 	return func(s *Server) { s.localResyncRunner = r }
 }
 
-// WithMemoryRefreshRequester enables the narrow SessionStart refresh route.
-// fn must only enqueue work; the request path must never run reconciliation.
-func WithMemoryRefreshRequester(fn func()) Option {
-	return func(s *Server) { s.memoryRefreshRequest = fn }
-}
-
 // LocalCompactRunner runs staged maintenance against the local SQLite archive.
 // The daemon injects this runner so the command shares the archive-wide
 // maintenance barrier with sync and resync.
@@ -719,7 +708,6 @@ func (s *Server) routes() {
 	configureHuma()
 	s.api = humago.New(s.mux, s.humaConfig())
 	s.registerTypedAPIRoutes()
-	s.registerMemoryRefreshRoute()
 	s.registerTelemetryCaptureRoute()
 
 	if s.pprofEnabled {
