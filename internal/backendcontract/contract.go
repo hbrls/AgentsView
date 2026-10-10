@@ -10,7 +10,6 @@ package backendcontract
 import (
 	clickhousestore "go.kenn.io/agentsview/internal/clickhouse"
 	"go.kenn.io/agentsview/internal/db"
-	duckdbstore "go.kenn.io/agentsview/internal/duckdb"
 	postgresstore "go.kenn.io/agentsview/internal/postgres"
 	"go.kenn.io/agentsview/internal/storage"
 )
@@ -20,7 +19,6 @@ var (
 	_ db.Store = (*db.DB)(nil)
 	_ db.Store = (*postgresstore.Store)(nil)
 	_ db.Store = (*postgresstore.HostedStore)(nil)
-	_ db.Store = (*duckdbstore.Store)(nil)
 	_ db.Store = (*clickhousestore.Store)(nil)
 )
 
@@ -41,9 +39,6 @@ var (
 	_ storage.VectorSearchProvider = clickhousestore.Backend{}
 	_ storage.VectorSearchStore    = (*clickhousestore.Store)(nil)
 )
-
-// Derived mirror: local rebuild and Quack serve.
-var _ storage.Mirror = duckdbstore.Mirror{}
 
 // The archive supplies push watermarks to replicas.
 var _ storage.SyncStateStore = (*db.DB)(nil)

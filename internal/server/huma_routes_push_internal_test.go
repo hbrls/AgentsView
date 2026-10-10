@@ -21,7 +21,6 @@ import (
 	"go.kenn.io/agentsview/internal/clickhouse"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/duckdb"
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/postgres"
@@ -162,7 +161,6 @@ func testServerWithConfig(cfg config.Config) *Server {
 	return &Server{
 		cfg:      cfg,
 		replicas: []storage.Replica{postgres.Backend{}, clickhouse.Backend{}},
-		mirror:   duckdb.Mirror{},
 	}
 }
 
@@ -313,146 +311,6 @@ func TestPGPushEnsuresPricingAfterLocalSync(t *testing.T) {
 	assert.Equal(t, money.MustParseDollars("8"), rate.OutputPerMTok)
 }
 
-func TestDuckDBPushRejectsIncludeAndExcludeProjects(t *testing.T) {
-	s := testServerWithConfig(config.Config{})
-
-	_, err := s.humaMirrorPush(t.Context(), &daemonPushInput{
-		Body: daemonPushRequest{
-			Projects:        []string{"alpha"},
-			ExcludeProjects: []string{"beta"},
-		},
-	})
-	require.Error(t, err)
-
-	var statusErr interface{ GetStatus() int }
-	require.ErrorAs(t, err, &statusErr)
-	assert.Equal(t, http.StatusBadRequest, statusErr.GetStatus())
-	assert.Contains(t, err.Error(),
-		"projects and exclude_projects are mutually exclusive")
-}
-
-// TestDuckDBPushRejectsRemoteURLAsBadRequest verifies the daemon-side push
-// route rejects a remote Quack URL as bad request: push writes the local
-// mirror only, so a configured [duckdb].url is never a valid push target.
-func TestDuckDBPushRejectsRemoteURLAsBadRequest(t *testing.T) {
-	s := testServer(t, 30)
-
-	_, err := s.humaMirrorPush(t.Context(), &daemonPushInput{
-		Body: daemonPushRequest{
-			DuckDB: &config.DuckDBConfig{
-				URL:         "quack:https://duck.example.test",
-				MachineName: "workstation",
-			},
-		},
-	})
-	require.Error(t, err)
-
-	var statusErr interface{ GetStatus() int }
-	require.ErrorAs(t, err, &statusErr)
-	assert.Equal(t, http.StatusBadRequest, statusErr.GetStatus())
-	assert.Contains(t, err.Error(), "duckdb push writes the local mirror")
-}
-
-// TestDuckDBPushConfigPinsServerMirrorPath pins the daemon-side path
-// guard: the mirror path a push writes is always the server's own resolved
-// configuration. A request-supplied config may still carry non-path fields
-// (machine name), but a request naming a DIFFERENT path is rejected — an
-// authenticated API caller must not be able to aim the rebuild's atomic
-// file replacement at an arbitrary daemon-writable file such as the
-// primary sessions.db.
-func TestDuckDBPushConfigPinsServerMirrorPath(t *testing.T) {
-	serverPath := filepath.Join(t.TempDir(), "server.duckdb")
-	s := testServerWithConfig(config.Config{
-		DuckDB: config.DuckDBConfig{Path: serverPath, MachineName: "daemon"},
-	})
-
-	tests := []struct {
-		name        string
-		req         *config.DuckDBConfig
-		wantMachine string
-		wantErrHas  string
-	}{
-		{
-			name:        "nil request config uses server config",
-			req:         nil,
-			wantMachine: "daemon",
-		},
-		{
-			name:        "empty request path defers to server path",
-			req:         &config.DuckDBConfig{MachineName: "workstation"},
-			wantMachine: "workstation",
-		},
-		{
-			name: "equal path in unclean form is accepted",
-			req: &config.DuckDBConfig{
-				Path: filepath.Join(
-					filepath.Dir(serverPath), ".", filepath.Base(serverPath),
-				),
-				MachineName: "workstation",
-			},
-			wantMachine: "workstation",
-		},
-		{
-			name: "different path is rejected",
-			req: &config.DuckDBConfig{
-				Path:        filepath.Join(t.TempDir(), "sessions.db"),
-				MachineName: "workstation",
-			},
-			wantErrHas: "server-configured mirror path",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := s.mirrorPushConfig(daemonPushRequest{DuckDB: tt.req})
-			if tt.wantErrHas != "" {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), tt.wantErrHas)
-				return
-			}
-			require.NoError(t, err)
-			assert.Equal(t, serverPath, got.Path,
-				"pushes must always write the server-resolved mirror path")
-			assert.Equal(t, tt.wantMachine, got.MachineName)
-		})
-	}
-}
-
-// TestDuckDBPushRejectsMismatchedMirrorPathAsBadRequest is the handler-level
-// twin of TestDuckDBPushConfigPinsServerMirrorPath: the route surfaces the
-// path mismatch as a 400 instead of writing anywhere.
-func TestDuckDBPushRejectsMismatchedMirrorPathAsBadRequest(t *testing.T) {
-	s := testServer(t, 30)
-	s.cfg.DuckDB = config.DuckDBConfig{
-		Path:        filepath.Join(t.TempDir(), "server.duckdb"),
-		MachineName: "daemon",
-	}
-
-	_, err := s.humaMirrorPush(t.Context(), &daemonPushInput{
-		Body: daemonPushRequest{
-			DuckDB: &config.DuckDBConfig{
-				Path:        filepath.Join(t.TempDir(), "sessions.db"),
-				MachineName: "workstation",
-			},
-		},
-	})
-	require.Error(t, err)
-
-	var statusErr interface{ GetStatus() int }
-	require.ErrorAs(t, err, &statusErr)
-	assert.Equal(t, http.StatusBadRequest, statusErr.GetStatus())
-	assert.Contains(t, err.Error(), "server-configured mirror path")
-}
-
-func TestDuckDBPushSyncOptionsPassesThroughProjectFilters(t *testing.T) {
-	got := mirrorPushOptions(daemonPushRequest{
-		Projects:        []string{"alpha"},
-		ExcludeProjects: []string{"beta"},
-	})
-
-	assert.Equal(t, []string{"alpha"}, got.Projects)
-	assert.Equal(t, []string{"beta"}, got.ExcludeProjects)
-}
-
 func TestSyncRemotesRouteIsStreaming(t *testing.T) {
 	s := testServer(t, 30)
 	spec := readOpenAPISpec(t, s.Handler())
@@ -467,7 +325,7 @@ func TestSyncRemotesRouteIsStreaming(t *testing.T) {
 func TestPushRoutesAreStreaming(t *testing.T) {
 	s := testServer(t, 30)
 	spec := readOpenAPISpec(t, s.Handler())
-	for _, path := range []string{"/api/v1/push/pg", "/api/v1/push/duckdb"} {
+	for _, path := range []string{"/api/v1/push/pg", "/api/v1/push/clickhouse"} {
 		op := requireOpenAPIOperation(t, spec, "post", path)
 		require.Contains(t, op.Responses, "200", path)
 		assertStreamingResponseContent(t, op.Responses["200"].Content)
@@ -484,7 +342,7 @@ func TestPushRoutesReturn503WhileWriterClosedForSSE(t *testing.T) {
 	require.NoError(t, database.CloseWriter())
 	defer func() { assert.NoError(t, database.ReopenWriter()) }()
 
-	for _, path := range []string{"/api/v1/push/pg", "/api/v1/push/duckdb"} {
+	for _, path := range []string{"/api/v1/push/pg", "/api/v1/push/clickhouse"} {
 		req := httptest.NewRequestWithContext(t.Context(),
 			http.MethodPost, path, strings.NewReader(`{"full":false}`),
 		)

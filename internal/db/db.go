@@ -5442,24 +5442,6 @@ func (db *DB) SetSyncState(ctx context.Context, key, value string) error {
 	return err
 }
 
-// DeleteSyncStateByPrefix removes every pg_sync_state row whose key starts
-// with prefix. Used to clean up state left behind by superseded sync
-// designs (e.g. the pre-schema-v3 DuckDB push watermarks, now tracked in
-// the mirror's own sync_metadata table instead of local pg_sync_state).
-// prefix is escaped so LIKE metacharacters in it (%, _) match literally.
-func (db *DB) DeleteSyncStateByPrefix(ctx context.Context, prefix string) error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	escaped := strings.NewReplacer(
-		"\\", "\\\\", "%", "\\%", "_", "\\_",
-	).Replace(prefix)
-	_, err := db.getWriter().Exec(ctx,
-		"DELETE FROM pg_sync_state WHERE key LIKE ? ESCAPE '\\'",
-		escaped+"%",
-	)
-	return err
-}
-
 // DeleteSyncState removes the pg_sync_state row for exactly key, if present.
 func (db *DB) DeleteSyncState(ctx context.Context, key string) error {
 	db.mu.Lock()

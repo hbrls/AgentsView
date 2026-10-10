@@ -1150,11 +1150,6 @@ func TestHTTPSearchContent_501PreservesBackendSpecificReason(t *testing.T) {
 		body string
 	}{
 		{
-			name: "DuckDB unsupported",
-			body: "semantic search not available: semantic search is not " +
-				"supported by the DuckDB backend",
-		},
-		{
 			name: "PostgreSQL vector disabled",
 			body: "semantic search not available: semantic search: PostgreSQL " +
 				"requires [vector] enabled with a matching [vector.embeddings] " +

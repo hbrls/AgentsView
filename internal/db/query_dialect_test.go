@@ -103,33 +103,6 @@ func TestBuildSessionFilterSQLRendersEquivalentDialectFilters(t *testing.T) {
 				"secret_leak_count > 0 AND secrets_rules_version IN ($20,$21)",
 			},
 		},
-		{
-			name:    "duckdb",
-			dialect: DuckDBQueryDialect(),
-			wantParts: []string{
-				"message_count > 0",
-				"deleted_at IS NULL",
-				"relationship_type NOT IN ('subagent', 'fork')",
-				"project = ?",
-				"project != ?",
-				"machine IN (?,?)",
-				"agent IN (?,?)",
-				"CAST(COALESCE(ended_at, (SELECT MAX(m.timestamp) FROM messages m WHERE m.session_id = sessions.id AND m.timestamp IS NOT NULL), started_at, created_at) AS TIMESTAMP) >= CAST(? AS TIMESTAMP)",
-				"CAST(COALESCE(started_at, created_at) AS TIMESTAMP) < CAST(? AS TIMESTAMP)",
-				"CAST(COALESCE(ended_at, (SELECT MAX(m.timestamp) FROM messages m WHERE m.session_id = sessions.id AND m.timestamp IS NOT NULL), started_at, created_at) AS TIMESTAMP) >= CAST(? AS TIMESTAMP)",
-				"CAST(COALESCE(started_at, created_at) AS TIMESTAMP) < CAST(? AS TIMESTAMP)",
-				"CAST(COALESCE(ended_at, (SELECT MAX(m.timestamp) FROM messages m WHERE m.session_id = sessions.id AND m.timestamp IS NOT NULL), started_at, created_at) AS TIMESTAMP) >= CAST(? AS TIMESTAMP)",
-				"message_count >= ?",
-				"message_count <= ?",
-				"user_message_count >= ?",
-				"(termination_status = 'clean' OR termination_status = 'awaiting_user')",
-				"(user_message_count > 1 OR is_automated = TRUE)",
-				"outcome IN (?,?)",
-				"health_grade IN (?,?)",
-				"tool_failure_signal_count >= ?",
-				"secret_leak_count > 0 AND secrets_rules_version IN (?,?)",
-			},
-		},
 	}
 	wantArgs := []any{
 		"proj-a", "unknown", "laptop", "server", "claude", "codex",
@@ -171,7 +144,6 @@ func TestBuildSessionFilterSQLResolvesDSTDateBounds(t *testing.T) {
 	}{
 		{name: "sqlite", dialect: SQLiteQueryDialect()},
 		{name: "postgres", dialect: PostgresQueryDialect()},
-		{name: "duckdb", dialect: DuckDBQueryDialect()},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -200,7 +172,6 @@ func TestBuildSessionFilterSQLRendersIncludeChildrenCTE(t *testing.T) {
 	}{
 		{"sqlite", SQLiteQueryDialect(), []any{"laptop", "server", "claude"}},
 		{"postgres", PostgresQueryDialect(), []any{"laptop", "server", "claude"}},
-		{"duckdb", DuckDBQueryDialect(), []any{"laptop", "server", "claude"}},
 	}
 
 	for _, tt := range tests {
@@ -262,15 +233,6 @@ func TestBuildSessionFilterSQLRendersBranchPairs(t *testing.T) {
 				"agent = $6",
 			},
 		},
-		{
-			name:    "duckdb",
-			dialect: DuckDBQueryDialect(),
-			wantParts: []string{
-				"machine = ?",
-				"((project = ? AND git_branch = ?) OR (project = ? AND git_branch = ?))",
-				"agent = ?",
-			},
-		},
 	}
 
 	for _, tt := range tests {
@@ -314,13 +276,6 @@ func TestSessionCursorFragmentsAreParameterized(t *testing.T) {
 			wantWhere:  "(COALESCE(ended_at, started_at, created_at), id) < ($21::timestamptz, $22)",
 			wantLimit:  "LIMIT $23 OFFSET $24",
 		},
-		{
-			name:       "duckdb",
-			dialect:    DuckDBQueryDialect(),
-			startIndex: 0,
-			wantWhere:  `(COALESCE(ended_at, started_at, created_at), id) < (CAST(? AS TIMESTAMP), ?)`,
-			wantLimit:  "LIMIT ? OFFSET ?",
-		},
 	}
 
 	for _, tt := range tests {
@@ -361,13 +316,6 @@ func TestQueryDialectPredicatesKeepUserValuesParameterized(t *testing.T) {
 			wantRegex: "body ~* $2",
 			wantArgs:  []any{"%" + EscapeLikePattern(userPattern) + "%", userRegex},
 		},
-		{
-			name:      "duckdb",
-			dialect:   DuckDBQueryDialect(),
-			wantLike:  "body ILIKE ? ESCAPE '\\'",
-			wantRegex: "regexp_matches(body, ?)",
-			wantArgs:  []any{"%" + EscapeLikePattern(userPattern) + "%", userRegex},
-		},
 	}
 
 	for _, tt := range tests {
@@ -383,17 +331,6 @@ func TestQueryDialectPredicatesKeepUserValuesParameterized(t *testing.T) {
 			assert.NotContains(t, regex, userRegex)
 		})
 	}
-}
-
-func TestQueryDialectQualifyIdentifier(t *testing.T) {
-	assert.Equal(t, `"catalog"."schema"."sessions"`,
-		PostgresQueryDialect().Qualify("catalog", "schema", "sessions"))
-	assert.Equal(t, `"safe_name"`,
-		DuckDBQueryDialect().Qualify("", "", "safe_name"))
-
-	require.Panics(t, func() {
-		SQLiteQueryDialect().Qualify("", "", `sessions"; DROP TABLE sessions; --`)
-	})
 }
 
 func normalizeSQL(s string) string {

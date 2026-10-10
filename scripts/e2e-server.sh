@@ -6,7 +6,6 @@ TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT
 
 DB_PATH="$TMPDIR/sessions.db"
-DUCKDB_PATH="$TMPDIR/sessions.duckdb"
 EMPTY_DIR="$TMPDIR/empty"
 BACKEND="${AGENTSVIEW_E2E_BACKEND:-sqlite}"
 raw_e2e_port="${AGENTSVIEW_E2E_PORT-}"
@@ -60,9 +59,6 @@ else
       -o "$FIXTURE" "$ROOT/cmd/testfixture"
 fi
 fixture_args=(-out "$DB_PATH")
-if [ "$BACKEND" = "duckdb" ]; then
-  fixture_args+=(-duckdb-out "$DUCKDB_PATH")
-fi
 "$FIXTURE" "${fixture_args[@]}"
 
 if [ -n "$SERVER" ] && [ -f "$SERVER" ] && [ -x "$SERVER" ]; then
@@ -108,14 +104,6 @@ case "$BACKEND" in
   sqlite)
     echo "Starting sqlite e2e server on :$E2E_PORT..."
     exec env "${agent_env[@]}" "$SERVER" serve \
-      --port "$E2E_PORT" \
-      --no-browser
-    ;;
-  duckdb)
-    echo "Starting duckdb e2e server on :$E2E_PORT..."
-    exec env "${agent_env[@]}" \
-      AGENTSVIEW_DUCKDB_PATH="$DUCKDB_PATH" \
-      "$SERVER" duckdb serve \
       --port "$E2E_PORT" \
       --no-browser
     ;;

@@ -176,7 +176,6 @@ type Server struct {
 	// replicas and mirror are the push backends registered by the
 	// composition root; each gets a daemon push route.
 	replicas []storage.Replica
-	mirror   storage.Mirror
 
 	// localSyncRunner, when set, backs the foreground local-sync HTTP handler
 	// with the worker-backed pass instead of running SyncThenRun in process.

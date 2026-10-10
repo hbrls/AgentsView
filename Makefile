@@ -36,7 +36,7 @@ AIR_BIN := $(shell if command -v air >/dev/null 2>&1; then command -v air; \
 	elif [ -x "$(GOPATH_FIRST)/bin/air" ]; then printf "%s" "$(GOPATH_FIRST)/bin/air"; \
 	fi)
 
-.PHONY: build build-release install install-cjk-fts simple-fts frontend frontend-dev dev check-air air-install desktop-dev desktop-build desktop-macos-app desktop-macos-dmg desktop-windows-installer desktop-linux-appimage desktop-app docs-install docs-build docs-serve docs-check docs-screenshots docs-assets-branch docs-generated-assets-branch docs-deploy-staging docs-deploy test test-short test-evalingest bench-backends bench-gate bench-gate-config bench-pg-usage test-postgres test-postgres-ci test-s3 postgres-up postgres-down test-clickhouse test-clickhouse-ci clickhouse-up clickhouse-down e2e e2e-duckdb memory-e2e vet lint lint-ci lint-golangci lint-golangci-ci nilaway nilaway-golangci-build lint-tools tidy clean release release-darwin-arm64 release-darwin-amd64 release-linux-amd64 install-hooks ensure-embed-dir pricing-snapshot sqlite-vec-header dev-snapshot help
+.PHONY: build build-release install install-cjk-fts simple-fts frontend frontend-dev dev check-air air-install desktop-dev desktop-build desktop-macos-app desktop-macos-dmg desktop-windows-installer desktop-linux-appimage desktop-app docs-install docs-build docs-serve docs-check docs-screenshots docs-assets-branch docs-generated-assets-branch docs-deploy-staging docs-deploy test test-short test-evalingest bench-backends bench-gate bench-gate-config bench-pg-usage test-postgres test-postgres-ci test-s3 postgres-up postgres-down test-clickhouse test-clickhouse-ci clickhouse-up clickhouse-down e2e memory-e2e vet lint lint-ci lint-golangci lint-golangci-ci nilaway nilaway-golangci-build lint-tools tidy clean release release-darwin-arm64 release-darwin-amd64 release-linux-amd64 install-hooks ensure-embed-dir pricing-snapshot sqlite-vec-header dev-snapshot help
 
 # Ensure go:embed has at least one file (no-op if frontend is built)
 ensure-embed-dir:
@@ -336,7 +336,7 @@ test-evalingest: pricing-snapshot ensure-embed-dir
 	CGO_ENABLED=1 go test -tags "fts5,evalingest" \
 		./internal/server -v -count=1
 
-# Compare db.Store read-query performance across SQLite, DuckDB, and PostgreSQL.
+# Compare db.Store read-query performance across SQLite and PostgreSQL.
 # Requires Docker because the PostgreSQL backend is started with testcontainers.
 BENCH_BACKENDS_FLAGS ?= -bench . -run '^$$' -benchmem
 BENCH_BACKENDS_SESSIONS ?= 1000
@@ -455,14 +455,6 @@ e2e:
 	cd frontend && \
 		PROJECT_MAPPING_WORKSPACE_E2E_ENABLED="$(PROJECT_MAPPING_WORKSPACE_E2E_ENABLED)" \
 		npx playwright test
-
-# Run focused Playwright smoke tests against duckdb serve.
-e2e-duckdb:
-	cd frontend && AGENTSVIEW_E2E_BACKEND=duckdb \
-		PROJECT_MAPPING_WORKSPACE_E2E_ENABLED="$(PROJECT_MAPPING_WORKSPACE_E2E_ENABLED)" \
-		npx playwright test \
-		e2e/duckdb-backend.spec.ts e2e/data-mode.spec.ts \
-		e2e/session-list.spec.ts --project=chromium
 
 # Run the opt-in native-client conversation-memory release gate. This uses the
 # caller's authenticated Claude Code and Codex installations and writes traces
@@ -697,7 +689,7 @@ help:
 	@echo ""
 	@echo "  test           - Run all tests"
 	@echo "  test-short     - Run fast tests only"
-	@echo "  bench-backends - Benchmark SQLite, DuckDB, and PostgreSQL stores"
+	@echo "  bench-backends - Benchmark SQLite and PostgreSQL stores"
 	@echo "  bench-pg-usage - Run opt-in PostgreSQL usage benchmarks against PG16"
 	@echo "  bench-gate     - Run hot-path benchmarks for local comparison"
 	@echo "  test-postgres  - Run PostgreSQL integration tests"
@@ -708,7 +700,6 @@ help:
 	@echo "  clickhouse-up  - Start test ClickHouse container"
 	@echo "  clickhouse-down - Stop test ClickHouse container"
 	@echo "  e2e            - Run Playwright E2E tests"
-	@echo "  e2e-duckdb     - Run DuckDB-backed Playwright smoke tests"
 	@echo "  memory-e2e     - Run opt-in Claude Code and Codex memory recall gate"
 	@echo "  vet            - Run go vet"
 	@echo "  lint           - Run golangci-lint and NilAway (auto-fix golangci issues)"

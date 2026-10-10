@@ -2,7 +2,6 @@ package db
 
 import (
 	"fmt"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -20,8 +19,7 @@ const (
 type timestampKind int
 
 const (
-	timestampText timestampKind = iota
-	timestampUnixSeconds
+	timestampUnixSeconds timestampKind = iota
 	timestampTimestamptz
 	timestampCast
 )
@@ -255,72 +253,12 @@ func clickhouseCastCursor(ph string, kind valueKind) string {
 	}
 }
 
-// DuckDBQueryDialect returns DuckDB-oriented SQL fragments for renderer tests
-// and future backend use. It does not couple to internal/duckdb.
-func DuckDBQueryDialect() QueryDialect {
-	return QueryDialect{
-		name:             "duckdb",
-		placeholderStyle: placeholderQuestion,
-		trueLiteral:      "TRUE",
-		falseLiteral:     "FALSE",
-		dateStartExpr: func(q func(string) string) string {
-			return "CAST(COALESCE(" + q("started_at") + ", " +
-				q("created_at") + ") AS TIMESTAMP)"
-		},
-		dateEndExpr: func(q func(string) string) string {
-			return "CAST(COALESCE(" + q("ended_at") +
-				", (SELECT MAX(m.timestamp) FROM messages m" +
-				" WHERE m.session_id = " + outerSessionID(q) +
-				" AND m.timestamp IS NOT NULL), " + q("started_at") +
-				", " + q("created_at") + ") AS TIMESTAMP)"
-		},
-		dateParam: func(ph string) string {
-			return "CAST(" + ph + " AS TIMESTAMP)"
-		},
-		activityParam:      func(ph string) string { return "CAST(" + ph + " AS TIMESTAMP)" },
-		cursorActivityExpr: "COALESCE(ended_at, started_at, created_at)",
-		cursorParam: func(ph string) string {
-			return "CAST(" + ph + " AS TIMESTAMP)"
-		},
-		castCursor:             duckCastCursor,
-		terminationExpr:        "COALESCE(ended_at, started_at, created_at)",
-		terminationKind:        timestampCast,
-		caseInsensitiveLike:    "ILIKE",
-		caseInsensitiveLikeEsc: `ESCAPE '\'`,
-		regexPredicate: func(col, ph string) string {
-			return "regexp_matches(" + col + ", " + ph + ")"
-		},
-		sidebarChildRelationships:   []string{"subagent", "fork"},
-		canonicalChildRelationships: []string{"subagent", "fork", "continuation"},
-		nullsLast:                   true,
-	}
-}
-
 func (d QueryDialect) placeholder(n int) string {
 	if d.placeholderStyle == placeholderDollar {
 		return fmt.Sprintf("$%d", n)
 	}
 	return "?"
 }
-
-// Qualify renders a safely quoted identifier path. Empty catalog/schema parts
-// are skipped. Invalid identifiers panic because callers should only pass
-// static backend-owned names, never user input.
-func (d QueryDialect) Qualify(parts ...string) string {
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		if p == "" {
-			continue
-		}
-		if !safeIdentifierRE.MatchString(p) {
-			panic("unsafe SQL identifier: " + p)
-		}
-		out = append(out, `"`+p+`"`)
-	}
-	return strings.Join(out, ".")
-}
-
-var safeIdentifierRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // NormalizeSessionTimezone validates an IANA timezone name and returns the
 // canonical UTC default used when callers omit it. "Local" is intentionally
@@ -418,19 +356,6 @@ func pgCastCursor(ph string, kind valueKind) string {
 		return ph + "::bigint"
 	case kindReal:
 		return ph + "::double precision"
-	default:
-		return ph
-	}
-}
-
-func duckCastCursor(ph string, kind valueKind) string {
-	switch kind {
-	case kindTimestamp:
-		return "CAST(" + ph + " AS TIMESTAMP)"
-	case kindInt:
-		return "CAST(" + ph + " AS BIGINT)"
-	case kindReal:
-		return "CAST(" + ph + " AS DOUBLE)"
 	default:
 		return ph
 	}

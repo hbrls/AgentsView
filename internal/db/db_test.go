@@ -6504,49 +6504,6 @@ func TestListStarredSessionIDsForScope(t *testing.T) {
 	assert.Equal(t, []string{"s2"}, betaOnly)
 }
 
-func TestDeleteSyncStateByPrefix(t *testing.T) {
-	d := testDB(t)
-
-	require.NoError(t, d.SetSyncState(t.Context(), "duckdb_last_push_at", "t1"))
-	require.NoError(t, d.SetSyncState(t.Context(), "duckdb_last_push_at:work", "t2"))
-	require.NoError(t, d.SetSyncState(t.Context(), "duckdb_last_push_boundary_state", "b1"))
-	require.NoError(t, d.SetSyncState(t.Context(), "last_push_at", "keep-me"))
-
-	require.NoError(t, d.DeleteSyncStateByPrefix(t.Context(), "duckdb_"))
-
-	for _, key := range []string{
-		"duckdb_last_push_at", "duckdb_last_push_at:work", "duckdb_last_push_boundary_state",
-	} {
-		value, err := d.GetSyncState(t.Context(), key)
-		require.NoError(t, err, "GetSyncState %s", key)
-		assert.Empty(t, value, "key %s should have been deleted", key)
-	}
-
-	kept, err := d.GetSyncState(t.Context(), "last_push_at")
-	require.NoError(t, err, "GetSyncState last_push_at")
-	assert.Equal(t, "keep-me", kept, "unrelated keys must not be deleted")
-}
-
-func TestDeleteSyncStateByPrefixEscapesLikeMetacharacters(t *testing.T) {
-	d := testDB(t)
-
-	// Keys containing literal LIKE metacharacters (% and _) must only match
-	// as literal characters, not as wildcards: a prefix of "a_b" must not
-	// also delete "axb".
-	require.NoError(t, d.SetSyncState(t.Context(), "a_b_target", "v1"))
-	require.NoError(t, d.SetSyncState(t.Context(), "axb_unrelated", "v2"))
-
-	require.NoError(t, d.DeleteSyncStateByPrefix(t.Context(), "a_b"))
-
-	deleted, err := d.GetSyncState(t.Context(), "a_b_target")
-	require.NoError(t, err)
-	assert.Empty(t, deleted)
-
-	kept, err := d.GetSyncState(t.Context(), "axb_unrelated")
-	require.NoError(t, err)
-	assert.Equal(t, "v2", kept, "underscore in prefix must not act as a wildcard")
-}
-
 func TestRestoreSession(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()

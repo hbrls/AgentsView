@@ -63,18 +63,6 @@ func replicaPushOperation(name string) (daemonPushOperation, error) {
 	return operation, nil
 }
 
-func mirrorPushOperation(
-	ctx context.Context, api *apiclient.Client, body *apiclient.DaemonPushRequest,
-) (*http.Response, []byte, *runtime.Stream[[]byte], error) {
-	response, err := api.PostAPIV1PushDuckdbStreamWithResponse(
-		ctx, &apiclient.PostAPIV1PushDuckdbRequestOptions{Body: body},
-	)
-	if response == nil {
-		return nil, nil, nil, err
-	}
-	return response.HTTPResponse, response.Body, response.Stream200, nil
-}
-
 func startupSyncOperation(
 	ctx context.Context, api *apiclient.Client, _ *apiclient.DaemonPushRequest,
 ) (*http.Response, []byte, *runtime.Stream[[]byte], error) {
