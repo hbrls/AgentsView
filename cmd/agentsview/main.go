@@ -391,7 +391,6 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	var attachedSources *archivesource.Manager
 	var reloadIngestion server.IngestionReloader
 	var completeWorkerStartup func()
-	var memoryRefresh *memoryRefreshQueue
 	if !cfg.NoSync {
 		var onStartupReconciled func(sync.SyncStats, error)
 		var queueRebuildRetry func(sync.WatchBatch)
@@ -532,17 +531,6 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 			ctx, cfg, ingestion, engine, database, writeLock, idleTracker,
 			validRemotes, emitter, attachedSources,
 		)
-		memoryRefresh = newMemoryRefreshQueue()
-		go runMemoryRefreshScheduler(
-			ctx, memoryRefresh.requests, memoryRefreshDebounce,
-			func() {
-				idleTracker.Do(func() {
-					runScheduledSyncPass(
-						ctx, engine, scheduledReconcileTargets(ingestion.Config()),
-					)
-				})
-			},
-		)
 	} else if opts.ReloadConfig != nil {
 		// Without a background engine the server reconfigures its own
 		// on-demand engine from the reloaded settings.
@@ -661,10 +649,6 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		srvOpts = append(srvOpts, server.WithLocalResyncRunner(
 			server.LocalResyncRunner(ingestion.foregroundSync(withAttachedSources(attachedSources, server.LocalSyncRunner(newForegroundResyncRunner(ctx, cfg, engine, database))))),
 		))
-	}
-	if memoryRefresh != nil {
-		srvOpts = append(srvOpts,
-			server.WithMemoryRefreshRequester(memoryRefresh.Notify))
 	}
 	if engine != nil {
 		srvOpts = append(srvOpts, server.WithLocalCompactRunner(
