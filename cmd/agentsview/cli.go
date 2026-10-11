@@ -120,7 +120,6 @@ func newRootCommand() *cobra.Command {
 	root.AddCommand(newUsageCommand())
 	root.AddCommand(newActivityCommand())
 	root.AddCommand(newPGCommand())
-	root.AddCommand(newRawSyncCommand())
 	root.AddCommand(newEmbeddingsCommand())
 	root.AddCommand(newSessionCommand())
 	root.AddCommand(newMCPCommand())

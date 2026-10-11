@@ -59,7 +59,6 @@ func (f *crushProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 	originalRoots := make([]string, len(cfg.Roots))
 	copy(originalRoots, cfg.Roots)
 	expandedRoots, registryMapping, projectMapping, rootErr := normalizeCrushRoots(cfg.Roots)
-	maps.Copy(projectMapping, cfg.RawCaptureProjectDirs)
 	if cfg.StableSourceSnapshots {
 		// crush.db does not store the project path, so hosted snapshots recover
 		// it from the provider-owned logical manifest path.

@@ -53,13 +53,6 @@ filter:
       - get-api-v1-remote-sync-targets
       - post-api-v1-artifacts-exchange
       - post-api-v1-export-conversations-initialize
-      - post-api-v1-raw-sync-tokens
-      - get-api-v1-raw-sync-status
-      - post-api-v1-raw-sync-objects-missing
-      - post-api-v1-raw-sync-uploads
-      - head-api-v1-raw-sync-uploads-upload-id
-      - patch-api-v1-raw-sync-uploads-upload-id
-      - post-api-v1-raw-sync-manifests
 overlay:
   sources:
     - internal/apiclient/models.overlay.yaml
