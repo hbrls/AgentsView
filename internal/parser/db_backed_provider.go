@@ -40,7 +40,7 @@ func (f dbBackedProviderFactory) Definition() AgentDef {
 }
 
 func (f dbBackedProviderFactory) Capabilities() Capabilities {
-	return withDBBackedRawCapture(f.spec(false).caps)
+	return f.spec(false).caps
 }
 
 func (f dbBackedProviderFactory) NewProvider(cfg ProviderConfig) Provider {
@@ -48,13 +48,12 @@ func (f dbBackedProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 	if f.normalizeRoots != nil {
 		cfg.Roots = f.normalizeRoots(cfg.Roots)
 	}
-	spec := f.spec(cfg.StableSourceSnapshots)
+	spec := f.spec(false)
 	sources := newDBBackedSourceSet(spec, cfg.Roots)
 	sources.tracker = f.tracker
-	sources.stableSnapshot = cfg.StableSourceSnapshots
 	return &dbBackedProvider{
 		Def:     cloneAgentDef(f.def),
-		Caps:    withDBBackedRawCapture(spec.caps),
+		Caps:    spec.caps,
 		Config:  cfg,
 		spec:    spec,
 		sources: sources,
@@ -65,166 +64,6 @@ type dbBackedProvider struct {
 	ProviderBase
 	spec    dbBackedProviderSpec
 	sources dbBackedSourceSet
-}
-
-var _ StreamingRawCaptureSourceProvider = (*dbBackedProvider)(nil)
-
-type dbBackedRawSource struct {
-	Root   string
-	DBPath string
-}
-
-func withDBBackedRawCapture(capabilities Capabilities) Capabilities {
-	capabilities.RawCapture = RawCaptureCapabilities{
-		Support:  CapabilitySupported,
-		Shape:    RawCaptureShapeSQLite,
-		Append:   RawCaptureAppendReplaceOnly,
-		Snapshot: RawCaptureSnapshotOnlineBackup,
-	}
-	return capabilities
-}
-
-func (p *dbBackedProvider) DiscoverRawCaptureSourcesEach(
-	ctx context.Context,
-	yield func(SourceRef) error,
-) (bool, error) {
-	complete := true
-	for _, root := range p.sources.roots {
-		if err := ctx.Err(); err != nil {
-			return false, err
-		}
-		if err := ReportRawCaptureDiscoveryProgress(ctx); err != nil {
-			return false, err
-		}
-		dbPath := p.spec.findDB(root)
-		if dbPath == "" {
-			complete = complete && rawCaptureDBRootComplete(root, p.spec.dbName)
-			continue
-		}
-		if !rawCaptureDBPathRegular(dbPath) {
-			complete = false
-			continue
-		}
-		if err := yield(p.newRawCaptureSource(root, dbPath)); err != nil {
-			return false, err
-		}
-	}
-	return complete, nil
-}
-
-func rawCaptureDBPathRegular(path string) bool {
-	info, err := os.Lstat(path)
-	if err != nil {
-		return false
-	}
-	return info.Mode().IsRegular()
-}
-
-func rawCaptureDBRootComplete(root, dbName string) bool {
-	info, err := os.Stat(root)
-	if err != nil || !info.IsDir() {
-		return false
-	}
-	dbInfo, err := os.Lstat(filepath.Join(root, dbName))
-	if err == nil {
-		return dbInfo.Mode().IsRegular()
-	}
-	if !errors.Is(err, os.ErrNotExist) {
-		return false
-	}
-	return true
-}
-
-func (p *dbBackedProvider) RawCaptureSourcesForChangedPath(
-	ctx context.Context,
-	req ChangedPathRequest,
-) ([]SourceRef, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	for _, root := range p.sources.roots {
-		if req.WatchRoot != "" && !samePath(req.WatchRoot, root) {
-			continue
-		}
-		dbPath, ok := p.sources.dbPathForEvent(root, req.Path)
-		if !ok || !IsRegularFile(dbPath) {
-			continue
-		}
-		return []SourceRef{p.newRawCaptureSource(root, dbPath)}, nil
-	}
-	return nil, nil
-}
-
-func (p *dbBackedProvider) PlanRawCapture(
-	ctx context.Context,
-	source SourceRef,
-) (RawCapturePlan, error) {
-	if err := ctx.Err(); err != nil {
-		return RawCapturePlan{}, err
-	}
-	raw, ok := source.Opaque.(dbBackedRawSource)
-	if !ok || raw.Root == "" || raw.DBPath == "" {
-		return RawCapturePlan{}, invalidRawCapturePlan("database source path unavailable")
-	}
-	if source.Provider != p.spec.agent || source.Key != p.spec.dbName ||
-		!samePath(raw.DBPath, filepath.Join(raw.Root, p.spec.dbName)) ||
-		!IsRegularFile(raw.DBPath) {
-		return RawCapturePlan{}, invalidRawCapturePlan("database source does not match provider root")
-	}
-	return RawCapturePlan{
-		ConfiguredRoot: raw.Root,
-		CaptureRoot:    raw.Root,
-		SourceKey:      source.Key,
-		Entries: []RawCaptureEntry{{
-			Path:      p.spec.dbName,
-			LocalPath: raw.DBPath,
-		}},
-	}, nil
-}
-
-func (p *dbBackedProvider) newRawCaptureSource(root, dbPath string) SourceRef {
-	return SourceRef{
-		Provider:       p.spec.agent,
-		Key:            p.spec.dbName,
-		DisplayPath:    dbPath,
-		FingerprintKey: dbPath,
-		Opaque: dbBackedRawSource{
-			Root: root, DBPath: dbPath,
-		},
-	}
-}
-
-// RawSnapshotSessions enumerates every logical session inside one physical
-// database snapshot, preserving the session-scoped virtual sources the
-// provider's ordinary Fingerprint and Parse contract consumes.
-func (p *dbBackedProvider) RawSnapshotSessions(
-	ctx context.Context,
-	source SourceRef,
-) ([]SourceRef, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	raw, ok := source.Opaque.(dbBackedRawSource)
-	if !ok || raw.Root == "" || raw.DBPath == "" {
-		return nil, invalidRawCapturePlan("database source path unavailable")
-	}
-	if source.Provider != p.spec.agent || source.Key != p.spec.dbName ||
-		!samePath(raw.DBPath, filepath.Join(raw.Root, p.spec.dbName)) ||
-		!IsRegularFile(raw.DBPath) {
-		return nil, invalidRawCapturePlan("database source does not match provider root")
-	}
-	var sessions []SourceRef
-	seen := make(map[string]struct{})
-	err := p.spec.streamMeta(ctx, raw.DBPath, func(meta dbBackedSessionMeta) error {
-		ref := p.sources.newSourceRef(raw.Root, raw.DBPath, meta.SessionID, meta.VirtualPath)
-		ref.DiscoveryMTimeNS = meta.FileMtime
-		addJSONLSource(ref, &sessions, seen)
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return sessions, nil
 }
 
 func (p *dbBackedProvider) Discover(ctx context.Context) ([]SourceRef, error) {
@@ -319,15 +158,6 @@ func (p *dbBackedProvider) Parse(
 		return ParseOutcome{}, fmt.Errorf("stat %s: %w", src.DBPath, err)
 	}
 	machine := firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
-	if p.Config.StableSourceSnapshots {
-		// A stable-snapshot config parses a materialized copy of another
-		// host's tree (hosted raw derivation or bounded capture), so working
-		// directories recorded inside the store are foreign metadata. Keep
-		// project attribution lexical so cwd helpers that never consult the
-		// context still cannot walk the local filesystem from an untrusted
-		// path.
-		ctx = WithoutFilesystemProjectDiscovery(ctx)
-	}
 	results, err := p.spec.parse(ctx, src.DBPath, src.SessionID, machine)
 	if errors.Is(err, sql.ErrNoRows) {
 		return p.missingMemberOutcome(), nil

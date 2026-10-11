@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
-	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -15,10 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"unicode/utf8"
 )
-
-const crushRawProjectsDir = "projects"
 
 type crushChildRelationshipsCacheEntry struct {
 	mu       sync.Mutex
@@ -51,7 +47,7 @@ func (f *crushProviderFactory) Definition() AgentDef {
 }
 
 func (f *crushProviderFactory) Capabilities() Capabilities {
-	return withDBBackedRawCapture(crushProviderCapabilities())
+	return crushProviderCapabilities()
 }
 
 func (f *crushProviderFactory) NewProvider(cfg ProviderConfig) Provider {
@@ -59,26 +55,16 @@ func (f *crushProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 	originalRoots := make([]string, len(cfg.Roots))
 	copy(originalRoots, cfg.Roots)
 	expandedRoots, registryMapping, projectMapping, rootErr := normalizeCrushRoots(cfg.Roots)
-	if cfg.StableSourceSnapshots {
-		// crush.db does not store the project path, so hosted snapshots recover
-		// it from the provider-owned logical manifest path.
-		for _, root := range expandedRoots {
-			if projectDir, ok := crushRawProjectDir(root); ok {
-				projectMapping[filepath.Clean(root)] = projectDir
-			}
-		}
-	}
 	cfg.Roots = expandedRoots
-	spec := crushProviderSpec(cfg.StableSourceSnapshots)
+	spec := crushProviderSpec(false)
 	base := &dbBackedProvider{
 		Def:     cloneAgentDef(f.def),
-		Caps:    withDBBackedRawCapture(spec.caps),
+		Caps:    spec.caps,
 		Config:  cfg,
 		spec:    spec,
 		sources: newDBBackedSourceSet(spec, cfg.Roots),
 	}
 	base.sources.tracker = f.tracker
-	base.sources.stableSnapshot = cfg.StableSourceSnapshots
 	p := &crushProvider{
 		dbBackedProvider: base,
 		originalRoots:    originalRoots,
@@ -95,7 +81,7 @@ func (f *crushProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 	) ([]ParseResult, error) {
 		sess, msgs, err := parseCrushSession(
 			ctx, dbPath, sessionID, machine,
-			cfg.StableSourceSnapshots, p.projectMapping,
+			false, p.projectMapping,
 		)
 		if err != nil || sess == nil {
 			return nil, err
@@ -120,73 +106,6 @@ type crushProvider struct {
 	// configured registry, crush.db, or data-directory root that produced
 	// it, so source-machine mapping stays bound to the user's spelling.
 	configuredRoot map[string]string
-}
-
-// RawCaptureProjectPath returns project metadata that lives outside a raw
-// database. Other providers preserve their project metadata in the source.
-func RawCaptureProjectPath(provider Provider, root string) (string, error) {
-	if p, ok := provider.(*crushProvider); ok {
-		if p.rootErr != nil {
-			return "", p.rootErr
-		}
-		return crushProjectDir(filepath.Join(root, CrushDBName), p.projectMapping), nil
-	}
-	return "", nil
-}
-
-func crushRawCaptureEntryPath(projectDir string) string {
-	encoded := base64.RawURLEncoding.EncodeToString([]byte(projectDir))
-	return crushRawProjectsDir + "/" + encoded + "/" + CrushDBName
-}
-
-func crushRawProjectDir(dataDir string) (string, bool) {
-	if filepath.Base(filepath.Dir(dataDir)) != crushRawProjectsDir {
-		return "", false
-	}
-	decoded, err := base64.RawURLEncoding.DecodeString(filepath.Base(dataDir))
-	if err != nil || len(decoded) == 0 || !utf8.Valid(decoded) {
-		return "", false
-	}
-	return string(decoded), true
-}
-
-func (p *crushProvider) currentRawCaptureProvider() (*dbBackedProvider, map[string]string) {
-	// Periodic raw-sync audits reuse one provider. Re-read projects.json so a
-	// project registered after startup enters the next bounded audit.
-	currentRoots, _, currentProjects, _ := normalizeCrushRoots(p.originalRoots)
-	roots, _, _, _ := normalizeCrushRoots(
-		append(append([]string(nil), p.Config.Roots...), currentRoots...),
-	)
-	projects := maps.Clone(p.projectMapping)
-	maps.Copy(projects, currentProjects)
-	base := *p.dbBackedProvider
-	base.sources = newDBBackedSourceSet(p.spec, roots)
-	return &base, projects
-}
-
-func (p *crushProvider) DiscoverRawCaptureSourcesEach(
-	ctx context.Context, yield func(SourceRef) error,
-) (bool, error) {
-	provider, _ := p.currentRawCaptureProvider()
-	return provider.DiscoverRawCaptureSourcesEach(ctx, yield)
-}
-
-func (p *crushProvider) PlanRawCapture(
-	ctx context.Context, source SourceRef,
-) (RawCapturePlan, error) {
-	plan, err := p.dbBackedProvider.PlanRawCapture(ctx, source)
-	if err != nil {
-		return RawCapturePlan{}, err
-	}
-	raw, ok := source.Opaque.(dbBackedRawSource)
-	if !ok {
-		return RawCapturePlan{}, invalidRawCapturePlan("Crush project path unavailable")
-	}
-	_, projects := p.currentRawCaptureProvider()
-	plan.Entries[0].Path = crushRawCaptureEntryPath(
-		crushProjectDir(raw.DBPath, projects),
-	)
-	return plan, nil
 }
 
 // crushConfiguredRootByExpanded maps every expanded data directory onto the
@@ -381,7 +300,7 @@ func (p *crushProvider) Fingerprint(
 		return fingerprint, nil
 	}
 	hash, found, err := crushSessionFingerprint(
-		ctx, src.DBPath, src.SessionID, p.Config.StableSourceSnapshots,
+		ctx, src.DBPath, src.SessionID, false,
 		&p.childCache,
 	)
 	if err != nil {

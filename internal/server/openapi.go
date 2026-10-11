@@ -17,9 +17,8 @@ func OpenAPISpec(version VersionInfo, opts ...Option) *huma.OpenAPI {
 		cfg: config.Config{
 			WriteTimeout: 30 * time.Second,
 		},
-		mux:               http.NewServeMux(),
-		version:           version,
-		rawSyncSchemaOnly: true,
+		mux:     http.NewServeMux(),
+		version: version,
 	}
 	for _, opt := range opts {
 		opt(s)

@@ -15,12 +15,9 @@ import (
 )
 
 var (
-	_ Provider                          = (*codexProvider)(nil)
-	_ ActivityHintProvider              = (*codexProvider)(nil)
-	_ S3Provider                        = (*codexProvider)(nil)
-	_ RawCaptureProvider                = (*codexProvider)(nil)
-	_ RawCaptureSourceProvider          = (*codexProvider)(nil)
-	_ StreamingRawCaptureSourceProvider = (*codexProvider)(nil)
+	_ Provider             = (*codexProvider)(nil)
+	_ ActivityHintProvider = (*codexProvider)(nil)
+	_ S3Provider           = (*codexProvider)(nil)
 )
 
 // codexProviderSpec parameterizes the one shared Codex-format provider
@@ -104,8 +101,6 @@ func (f *codexProviderFactory) Capabilities() Capabilities {
 	caps := codexProviderCapabilities()
 	if f.spec.agent == AgentCodex {
 		caps.Source.S3Discovery = CapabilitySupported
-	} else {
-		caps.RawCapture = RawCaptureCapabilities{}
 	}
 	return caps
 }
@@ -139,80 +134,6 @@ func (p *codexProvider) Discover(ctx context.Context) ([]SourceRef, error) {
 
 func (p *codexProvider) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
 	return p.sources.DiscoverEach(ctx, yield)
-}
-
-func (p *codexProvider) DiscoverRawCaptureSourcesEach(
-	ctx context.Context,
-	yield func(SourceRef) error,
-) (bool, error) {
-	ctx = withRawCaptureStreamingTraversal(ctx)
-	var incomplete error
-	for index, root := range p.sources.roots {
-		if err := ReportRawCaptureDiscoveryProgress(ctx); err != nil {
-			return false, err
-		}
-		if isS3URI(root) {
-			continue
-		}
-		err := p.sources.discoverEachRoot(ctx, root, func(source SourceRef) error {
-			// The first root accepting this layout owns the physical file for
-			// the whole pass, including across audit batches. Checking roots
-			// avoids retaining a set that grows with the transcript archive.
-			for _, previous := range p.sources.roots[:index] {
-				if isS3URI(previous) {
-					continue
-				}
-				if _, _, supported := CodexSessionPathInfo(previous, source.DisplayPath); supported {
-					return nil
-				}
-			}
-			return yield(source)
-		})
-		if err == nil {
-			continue
-		}
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return false, ctxErr
-		}
-		rootErr, ok := rawCaptureIncompleteRootError(p.Def.Type, root, err)
-		if !ok {
-			return false, err
-		}
-		incomplete = errors.Join(incomplete, rootErr)
-	}
-	return incomplete == nil, incomplete
-}
-
-func (p *codexProvider) RawCaptureSourcesForChangedPath(
-	ctx context.Context,
-	req ChangedPathRequest,
-) ([]SourceRef, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if p.sources.ownsCodexSidecars() &&
-		filepath.Base(req.Path) == CodexSessionIndexFilename {
-		return nil, nil
-	}
-	roots := p.sources.roots
-	if req.WatchRoot != "" {
-		roots = nil
-		for _, root := range p.sources.roots {
-			if samePath(root, req.WatchRoot) {
-				roots = append(roots, root)
-			}
-		}
-	}
-	for _, root := range roots {
-		source, ok := p.sources.sourceRef(root, req.Path, true)
-		if !ok {
-			source, ok = p.sources.directPathSource(root, req.Path, true)
-		}
-		if ok {
-			return []SourceRef{source}, nil
-		}
-	}
-	return nil, nil
 }
 
 func (p *codexProvider) WatchPlan(ctx context.Context) (WatchPlan, error) {
@@ -355,120 +276,6 @@ func (p *codexProvider) Fingerprint(
 	source SourceRef,
 ) (SourceFingerprint, error) {
 	return p.sources.Fingerprint(ctx, source)
-}
-
-func (p *codexProvider) PlanRawCapture(
-	ctx context.Context,
-	source SourceRef,
-) (RawCapturePlan, error) {
-	if err := ctx.Err(); err != nil {
-		return RawCapturePlan{}, err
-	}
-	if p.spec.agent != AgentCodex {
-		return RawCapturePlan{}, invalidRawCapturePlan("provider does not own Codex raw companions")
-	}
-	src, ok := source.Opaque.(codexSource)
-	if !ok || src.Root == "" || src.Path == "" || isS3URI(src.Root) {
-		return RawCapturePlan{}, invalidRawCapturePlan("codex source is not a local discovered transcript")
-	}
-	captureRoot := filepath.Clean(src.Root)
-	indexPath := codexSessionIndexPath(src.Path)
-	if indexPath != "" {
-		// The provider reads this named sibling as session metadata, so raw
-		// capture widens only far enough to preserve the same parse inputs.
-		captureRoot = filepath.Dir(indexPath)
-	}
-	rel, err := filepath.Rel(captureRoot, src.Path)
-	if err != nil {
-		return RawCapturePlan{}, invalidRawCapturePlan(
-			"resolve Codex source path: %s", rawCaptureFilesystemError(err),
-		)
-	}
-	entries := []RawCaptureEntry{{
-		Path:       filepath.ToSlash(rel),
-		LocalPath:  src.Path,
-		Appendable: true,
-	}}
-	var sidecarRoots []string
-	if parentID, needed := codexReplayParentIDContext(ctx, src.Path); needed {
-		parentPath := ""
-		for _, root := range p.sources.roots {
-			if err := ctx.Err(); err != nil {
-				return RawCapturePlan{}, err
-			}
-			candidate := p.sources.findSourceFile(root, parentID)
-			if candidate == "" || samePath(candidate, src.Path) {
-				continue
-			}
-			parentPath = candidate
-			break
-		}
-		// Missing parents preserve the child's history, matching local parsing.
-		if parentPath != "" {
-			// One named parent may come from any configured root. Give an
-			// external parent its own flat root so it cannot collide with the
-			// child's layout, and hosted lookup can find it by session UUID.
-			parentRel := filepath.Join("replay-parent", filepath.Base(parentPath))
-			if rawCapturePathWithin(captureRoot, parentPath) {
-				parentRel, err = filepath.Rel(captureRoot, parentPath)
-				if err != nil {
-					return RawCapturePlan{}, invalidRawCapturePlan(
-						"resolve Codex replay parent: %s", rawCaptureFilesystemError(err),
-					)
-				}
-			} else {
-				sidecarRoots = append(sidecarRoots, filepath.Dir(parentPath))
-			}
-			entries = append(entries, RawCaptureEntry{
-				Path: filepath.ToSlash(parentRel), LocalPath: parentPath,
-			})
-		}
-	}
-	for i, candidate := range p.sources.metadata.IndexPaths(src.Path) {
-		info, err := os.Stat(candidate)
-		switch {
-		case err == nil && info.Mode().IsRegular():
-			// The home's own index keeps its name; each alias home's index
-			// is captured under a distinct logical path so parse inputs
-			// that came from another home travel with the transcript.
-			logical := CodexSessionIndexFilename
-			if i > 0 {
-				logical = fmt.Sprintf("alias-homes/%d/%s", i, CodexSessionIndexFilename)
-			}
-			if p.Config.StableSourceSnapshots && rawCapturePathWithin(captureRoot, candidate) {
-				// Materialized aliases already have custody paths. Keep their
-				// original ordinals even when missing indexes left gaps.
-				rel, err := filepath.Rel(captureRoot, candidate)
-				if err != nil {
-					return RawCapturePlan{}, invalidRawCapturePlan(
-						"resolve Codex session index: %s", rawCaptureFilesystemError(err),
-					)
-				}
-				logical = filepath.ToSlash(rel)
-			}
-			if filepath.Dir(candidate) != captureRoot {
-				sidecarRoots = append(sidecarRoots, filepath.Dir(candidate))
-			}
-			entries = append(entries, RawCaptureEntry{
-				Path:      logical,
-				LocalPath: candidate,
-			})
-		case errors.Is(err, os.ErrNotExist):
-		case err != nil:
-			return RawCapturePlan{}, invalidRawCapturePlan(
-				"stat Codex session index: %s", rawCaptureFilesystemError(err),
-			)
-		default:
-			return RawCapturePlan{}, invalidRawCapturePlan("Codex session index is not a regular file")
-		}
-	}
-	return RawCapturePlan{
-		ConfiguredRoot: src.Root,
-		CaptureRoot:    captureRoot,
-		SourceKey:      source.Key,
-		Entries:        entries,
-		SidecarRoots:   sidecarRoots,
-	}, nil
 }
 
 // ComputeMultiFileStatHash implements parser.MultiFileStatHasher over the
@@ -1375,12 +1182,6 @@ func codexProviderCapabilities() Capabilities {
 			FingerprintHashInCacheKey:           true,
 			FingerprintHashRequiredForFreshness: true,
 			SkipCacheFreshWithoutStoredRow:      true,
-		},
-		RawCapture: RawCaptureCapabilities{
-			Support:  CapabilitySupported,
-			Shape:    RawCaptureShapeFiles,
-			Append:   RawCaptureAppendOne,
-			Snapshot: RawCaptureSnapshotNone,
 		},
 	}
 }

@@ -20,10 +20,9 @@ import (
 // Store wraps a PostgreSQL connection for read-only session
 // queries.
 type Store struct {
-	hostedRelations bool
-	pg              *sql.DB
-	cursorMu        sync.RWMutex
-	cursorSecret    []byte
+	pg           *sql.DB
+	cursorMu     sync.RWMutex
+	cursorSecret []byte
 
 	insightCapabilityMu        sync.RWMutex
 	insightGenerationAvailable bool
@@ -1129,4 +1128,8 @@ func (s *Store) GetBranches(
 		branches = append(branches, bi)
 	}
 	return branches, rows.Err()
+}
+
+func (s *Store) sessionDialect() db.QueryDialect {
+	return db.PostgresQueryDialect()
 }

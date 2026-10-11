@@ -27,7 +27,6 @@ import (
 	"go.kenn.io/agentsview/internal/insight"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/pricingrefresh"
-	"go.kenn.io/agentsview/internal/rawsync"
 	"go.kenn.io/agentsview/internal/recall/extract"
 	"go.kenn.io/agentsview/internal/remotesync"
 	"go.kenn.io/agentsview/internal/service"
@@ -68,11 +67,8 @@ const (
 	defaultInsightLogDrainTimeout    = 2 * time.Second
 	defaultInsightLogStopWaitTimeout = 500 * time.Millisecond
 	defaultHTTPReadTimeout           = 10 * time.Second
-	corsAllowedRequestHeaders        = "Content-Type, Authorization, " +
-		service.SemanticSearchIntentHeader + ", " + rawSyncDeviceIDHeader +
-		", " + rawSyncUploadOffsetHeader
-	corsExposedResponseHeaders = rawSyncUploadOffsetHeader + ", " +
-		rawSyncUploadLengthHeader + ", " + rawSyncUploadCompleteHeader + ", Location"
+	corsAllowedRequestHeaders        = "Content-Type, Authorization, " + service.SemanticSearchIntentHeader
+	corsExposedResponseHeaders       = "Location"
 )
 
 // Server is the HTTP server that serves the SPA and REST API.
@@ -193,13 +189,6 @@ type Server struct {
 	telemetryCapture http.Handler
 
 	artifactExchangeRunner ArtifactExchangeRunner
-	rawSyncTenant          string
-	rawSyncDeviceAuth      RawSyncDeviceAuth
-	rawSyncCustody         RawSyncCustody
-	rawSyncStatus          RawSyncStatusReader
-	rawSyncSchemaOnly      bool
-	rawSyncUploads         RawSyncUploads
-	rawSyncJobHealth       RawSyncJobHealth
 
 	ensurePricing func(context.Context, *db.DB) error
 }
@@ -342,103 +331,6 @@ type IngestionReloader func(ctx context.Context) (config.Config, error)
 // restart.
 func WithIngestionReloader(r IngestionReloader) Option {
 	return func(s *Server) { s.ingestionReloader = r }
-}
-
-// RawSyncDeviceAuth exchanges device credentials and authenticates scoped
-// raw-transport tokens.
-type RawSyncDeviceAuth interface {
-	AuthenticateCredential(
-		context.Context, string, string,
-	) (rawsync.AuthIdentity, error)
-	IssueToken(
-		context.Context, string, string, rawsync.DeviceTokenScope,
-	) (rawsync.IssuedDeviceToken, error)
-	AuthenticateToken(
-		context.Context, string, rawsync.DeviceTokenScope,
-	) (rawsync.AuthIdentity, error)
-}
-
-// RawSyncCustody exposes authenticated raw-custody control-plane operations.
-type RawSyncCustody interface {
-	MissingObjects(
-		context.Context,
-		rawsync.AuthIdentity,
-		parser.AgentType,
-		[]rawsync.ObjectRef,
-	) ([]rawsync.ObjectRef, error)
-	CommitManifest(
-		context.Context,
-		rawsync.AuthIdentity,
-		rawsync.Manifest,
-	) (rawsync.CommitResult, error)
-}
-
-// RawSyncStatusReader reads authenticated tenant-scoped raw-sync status.
-type RawSyncStatusReader interface {
-	ReadRawSyncStatus(
-		context.Context,
-		rawsync.AuthIdentity,
-	) (rawsync.Status, error)
-}
-
-// RawSyncUploads exposes authenticated resumable raw-object transfers.
-type RawSyncUploads interface {
-	Start(
-		context.Context,
-		rawsync.AuthIdentity,
-		parser.AgentType,
-		rawsync.ObjectRef,
-	) (rawsync.UploadSession, bool, error)
-	Status(
-		context.Context,
-		rawsync.AuthIdentity,
-		string,
-	) (rawsync.UploadSession, error)
-	Append(
-		context.Context,
-		rawsync.AuthIdentity,
-		string,
-		int64,
-		[]byte,
-	) (rawsync.UploadSession, error)
-}
-
-// RawSyncJobHealth exposes read-only tenant-scoped raw parse-job health.
-type RawSyncJobHealth interface {
-	RawJobHealth(
-		context.Context,
-		rawsync.AuthIdentity,
-		rawsync.JobHealthQuery,
-	) (rawsync.JobHealthReport, error)
-}
-
-// WithRawSyncServices enables authenticated raw-sync machine routes.
-func WithRawSyncServices(auth RawSyncDeviceAuth, custody RawSyncCustody) Option {
-	return func(s *Server) {
-		s.rawSyncDeviceAuth = auth
-		s.rawSyncCustody = custody
-	}
-}
-
-// WithRawSyncUploads enables the scoped resumable raw-object data plane.
-func WithRawSyncUploads(uploads RawSyncUploads) Option {
-	return func(s *Server) {
-		s.rawSyncUploads = uploads
-	}
-}
-
-// WithRawSyncStatus enables the authenticated raw-sync status route.
-func WithRawSyncStatus(status RawSyncStatusReader) Option {
-	return func(s *Server) {
-		s.rawSyncStatus = status
-	}
-}
-
-// WithRawSyncJobHealth enables the scoped raw parse-job health read.
-func WithRawSyncJobHealth(health RawSyncJobHealth) Option {
-	return func(s *Server) {
-		s.rawSyncJobHealth = health
-	}
 }
 
 func insightAgentConfig(
@@ -1640,6 +1532,3 @@ func logMiddleware(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
-
-// WithRawSyncTenant binds every raw credential/token identity before route work.
-func WithRawSyncTenant(tenant string) Option { return func(s *Server) { s.rawSyncTenant = tenant } }

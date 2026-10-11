@@ -68,12 +68,6 @@ type ProxyConfig struct {
 
 // PGConfig holds PostgreSQL connection settings.
 type PGConfig struct {
-	RawTenant         string `toml:"raw_tenant" json:"raw_tenant,omitempty"`
-	RawDerivation     bool   `toml:"raw_derivation" json:"raw_derivation,omitempty"`
-	RawPollSeconds    int    `toml:"raw_poll_seconds" json:"raw_poll_seconds,omitempty"`
-	RawAttemptSeconds int    `toml:"raw_attempt_seconds" json:"raw_attempt_seconds,omitempty"`
-	RawMaxAttempts    int    `toml:"raw_max_attempts" json:"raw_max_attempts,omitempty"`
-
 	URL             string   `toml:"url" json:"url"`
 	Schema          string   `toml:"schema" json:"schema"`
 	MachineName     string   `toml:"machine_name" json:"machine_name"`

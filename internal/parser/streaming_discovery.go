@@ -306,45 +306,6 @@ func streamDirectoryEntriesDirect(
 	}
 }
 
-func withRawCaptureStreamingTraversal(ctx context.Context) context.Context {
-	reader := streamingDirectoryReader(streamDirectoryEntriesDirect)
-	if configured, ok := ctx.Value(
-		streamingDirectoryReaderContextKey{},
-	).(streamingDirectoryReader); ok {
-		reader = configured
-	}
-	return withStreamingDirectoryReader(ctx, func(
-		readerCtx context.Context,
-		dir string,
-		yield func(os.DirEntry) error,
-	) error {
-		openedInfo, err := os.Stat(dir)
-		if err != nil {
-			return err
-		}
-		// Windows resolves Stat identity lazily from the path. Prime it before
-		// traversal so a replacement cannot make openedInfo adopt the new ID.
-		_ = os.SameFile(openedInfo, openedInfo)
-		err = reader(readerCtx, dir, func(entry os.DirEntry) error {
-			if err := ReportRawCaptureDiscoveryProgress(readerCtx); err != nil {
-				return err
-			}
-			return yield(entry)
-		})
-		if err != nil {
-			return err
-		}
-		currentInfo, err := os.Stat(dir)
-		if err != nil {
-			return errors.Join(errStreamingDirectoryChanged, err)
-		}
-		if !os.SameFile(openedInfo, currentInfo) {
-			return errStreamingDirectoryChanged
-		}
-		return nil
-	})
-}
-
 // streamDirectoryTree walks a directory without filepath.WalkDir's
 // whole-directory name sort. Only one fixed-size ReadDir batch per active
 // directory and the directory-depth recursion stack are retained.

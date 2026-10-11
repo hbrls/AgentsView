@@ -2,7 +2,6 @@ package remotesync
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -204,21 +203,11 @@ func resolveFileScopedTarget(agent parser.AgentType, root string) (string, []str
 	var files []string
 	for _, source := range sources {
 		if agent == parser.AgentEvener {
-			plan, supported, err := parser.ResolveRawCapturePlan(context.Background(), provider, source)
+			sourceFiles, err := parser.EvenerSourceFiles(source)
 			if err != nil {
 				return "", nil, err
 			}
-			if !supported {
-				return "", nil, errors.New("evener provider does not declare source companions")
-			}
-			for _, entry := range plan.Entries {
-				// Capture validation canonicalizes paths; retain the configured
-				// root spelling used by the remote target's authorization scope.
-				rel, err := filepath.Rel(plan.ConfiguredRoot, entry.LocalPath)
-				if err != nil {
-					return "", nil, err
-				}
-				localPath := filepath.Join(root, rel)
+			for _, localPath := range sourceFiles {
 				regular, err := regularCuratedFile(root, localPath)
 				if err != nil {
 					return "", nil, err

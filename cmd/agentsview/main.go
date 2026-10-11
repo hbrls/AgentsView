@@ -26,7 +26,6 @@ import (
 	"go.kenn.io/agentsview/internal/insight"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/poller"
-	"go.kenn.io/agentsview/internal/rawderive"
 	"go.kenn.io/agentsview/internal/recall/extract"
 	"go.kenn.io/agentsview/internal/remotesync"
 	"go.kenn.io/agentsview/internal/secrets"
@@ -63,9 +62,6 @@ const (
 )
 
 func main() {
-	if handled, code := rawderive.RunParserChild(os.Args[1:]); handled {
-		os.Exit(code)
-	}
 	// Turn on the agentsview-test-fixture deny-list before any scan
 	// runs. The secrets package keeps the filter off by default so unit
 	// tests in this repo (which use the same random-looking fixtures

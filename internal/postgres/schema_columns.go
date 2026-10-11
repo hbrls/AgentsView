@@ -1,11 +1,8 @@
 package postgres
 
-// schemaColumnMigrations is shared by legacy setup and atomic hosted provisioning.
+// schemaColumnMigrations lists incremental additions to the PostgreSQL schema.
 func schemaColumnMigrations() []columnMigration {
 	return []columnMigration{
-		{"sessions", "provenance_kind", `provenance_kind TEXT NOT NULL DEFAULT 'legacy'`, "adding sessions.provenance_kind"},
-		{"sessions", "raw_group_id", `raw_group_id TEXT NOT NULL DEFAULT ''`, "adding sessions.raw_group_id"},
-		{"sessions", "raw_content_revision", `raw_content_revision TEXT NOT NULL DEFAULT ''`, "adding sessions.raw_content_revision"},
 		{
 			"model_pricing", "cache_creation_1h_microdollars_per_mtok",
 			`cache_creation_1h_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0`,

@@ -951,9 +951,6 @@ func EnsureSchema(
 	if _, err := db.ExecContext(ctx, coreDDL); err != nil {
 		return fmt.Errorf("creating pg tables: %w", err)
 	}
-	if err := ensureRawIngestSchemaPG(ctx, db); err != nil {
-		return err
-	}
 	log.Printf(
 		"pg schema: core DDL step completed in %s",
 		time.Since(step).Round(time.Millisecond),
@@ -1131,7 +1128,6 @@ func EnsureSchema(
 // Idempotent via IF NOT EXISTS.
 func createPartialIndexesPG(ctx context.Context, db pgSessionExecer) error {
 	indexes := []string{
-		`CREATE INDEX IF NOT EXISTS idx_sessions_raw_group ON sessions(raw_group_id) WHERE raw_group_id <> ''`,
 		// Match SQLite's bounded Activity terminal-event lookup, including
 		// completions that outlive a session's ended_at metadata.
 		`CREATE INDEX IF NOT EXISTS idx_tool_result_events_terminal

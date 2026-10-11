@@ -11,11 +11,8 @@ import (
 )
 
 var (
-	_ Provider                          = (*claudeProvider)(nil)
-	_ S3Provider                        = (*claudeProvider)(nil)
-	_ RawCaptureProvider                = (*claudeProvider)(nil)
-	_ RawCaptureSourceProvider          = (*claudeProvider)(nil)
-	_ StreamingRawCaptureSourceProvider = (*claudeProvider)(nil)
+	_ Provider   = (*claudeProvider)(nil)
+	_ S3Provider = (*claudeProvider)(nil)
 )
 
 type claudeProviderFactory struct {
@@ -57,52 +54,6 @@ func (p *claudeProvider) DiscoverEach(ctx context.Context, yield func(SourceRef)
 	return p.sources.DiscoverEach(ctx, yield)
 }
 
-func (p *claudeProvider) DiscoverRawCaptureSourcesEach(
-	ctx context.Context,
-	yield func(SourceRef) error,
-) (bool, error) {
-	ctx = withRawCaptureStreamingTraversal(ctx)
-	var incomplete error
-	for rootIndex, root := range p.sources.roots {
-		if err := ReportRawCaptureDiscoveryProgress(ctx); err != nil {
-			return false, err
-		}
-		if isS3URI(root) {
-			continue
-		}
-		err := p.sources.discoverEachRoot(ctx, root, func(source SourceRef) error {
-			for _, earlierRoot := range p.sources.roots[:rootIndex] {
-				earlier, ok := p.sources.sourceRefFromPath(
-					earlierRoot, source.DisplayPath,
-				)
-				if ok && earlier.Key == source.Key {
-					return nil
-				}
-			}
-			return yield(source)
-		})
-		if err == nil {
-			continue
-		}
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return false, ctxErr
-		}
-		rootErr, ok := rawCaptureIncompleteRootError(p.Def.Type, root, err)
-		if !ok {
-			return false, err
-		}
-		incomplete = errors.Join(incomplete, rootErr)
-	}
-	return incomplete == nil, incomplete
-}
-
-func (p *claudeProvider) RawCaptureSourcesForChangedPath(
-	ctx context.Context,
-	req ChangedPathRequest,
-) ([]SourceRef, error) {
-	return p.SourcesForChangedPath(ctx, req)
-}
-
 func (p *claudeProvider) WatchPlan(ctx context.Context) (WatchPlan, error) {
 	return p.sources.WatchPlan(ctx)
 }
@@ -127,74 +78,6 @@ func (p *claudeProvider) Fingerprint(
 	source SourceRef,
 ) (SourceFingerprint, error) {
 	return p.sources.Fingerprint(ctx, source)
-}
-
-func (p *claudeProvider) PlanRawCapture(
-	ctx context.Context,
-	source SourceRef,
-) (RawCapturePlan, error) {
-	if err := ctx.Err(); err != nil {
-		return RawCapturePlan{}, err
-	}
-	src, ok := source.Opaque.(claudeSource)
-	if !ok || src.Root == "" || src.Path == "" || isS3URI(src.Root) {
-		return RawCapturePlan{}, invalidRawCapturePlan("claude source is not a local discovered transcript")
-	}
-	rel, err := filepath.Rel(src.Root, src.Path)
-	if err != nil {
-		return RawCapturePlan{}, invalidRawCapturePlan(
-			"resolve claude source path: %s", rawCaptureFilesystemError(err),
-		)
-	}
-	entries := []RawCaptureEntry{{
-		Path:       filepath.ToSlash(rel),
-		LocalPath:  src.Path,
-		Appendable: true,
-	}}
-	// Background-fork lineage resolution reads sibling top-level project
-	// transcripts, so a project-level capture must carry them as appendable
-	// inputs. Provider ownership stays here: no hosted parser or classifier
-	// duplicates this set.
-	if claudeSourceIsProjectLevel(source, src.Path) {
-		siblings, err := claudeLineageCaptureSiblings(ctx, src.Path)
-		if err != nil {
-			return RawCapturePlan{}, err
-		}
-		for _, sibling := range siblings {
-			siblingRel, err := filepath.Rel(src.Root, sibling)
-			if err != nil {
-				return RawCapturePlan{}, invalidRawCapturePlan(
-					"resolve Claude lineage sibling: %s", rawCaptureFilesystemError(err),
-				)
-			}
-			entries = append(entries, RawCaptureEntry{
-				Path: filepath.ToSlash(siblingRel), LocalPath: sibling, Appendable: true,
-			})
-		}
-	}
-	sidecars, err := claudeLayoutSidecarFiles(ctx, src.Path)
-	if err != nil {
-		return RawCapturePlan{}, invalidRawCapturePlan(
-			"read Claude tool results: %s", rawCaptureFilesystemError(err),
-		)
-	}
-	for _, path := range sidecars {
-		rel, err := filepath.Rel(src.Root, path)
-		if err != nil {
-			return RawCapturePlan{}, invalidRawCapturePlan(
-				"resolve Claude tool result: %s", rawCaptureFilesystemError(err),
-			)
-		}
-		entries = append(entries, RawCaptureEntry{
-			Path: filepath.ToSlash(rel), LocalPath: path,
-		})
-	}
-	return RawCapturePlan{
-		ConfiguredRoot: src.Root,
-		CaptureRoot:    src.Root,
-		SourceKey:      source.Key,
-		Entries:        entries,
-	}, nil
 }
 
 // ComputeMultiFileStatHash implements parser.MultiFileStatHasher for the
@@ -962,12 +845,6 @@ func claudeProviderCapabilities() Capabilities {
 			FingerprintHashInCacheKey:           true,
 			FingerprintHashRequiredForFreshness: true,
 			SkipCacheFreshWithoutStoredRow:      true,
-		},
-		RawCapture: RawCaptureCapabilities{
-			Support:  CapabilitySupported,
-			Shape:    RawCaptureShapeFiles,
-			Append:   RawCaptureAppendMany,
-			Snapshot: RawCaptureSnapshotNone,
 		},
 	}
 }

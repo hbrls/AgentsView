@@ -14,7 +14,7 @@ import (
 const evenerTranscriptSuffix = ".transcript.jsonl"
 
 func newEvenerProviderFactory(def AgentDef) ProviderFactory {
-	return evenerProviderFactory{NewSourceSetFactory(def, evenerProviderCapabilities(), func(cfg ProviderConfig) SourceSet {
+	return NewSourceSetFactory(def, evenerProviderCapabilities(), func(cfg ProviderConfig) SourceSet {
 		return evenerSourceSet{singleFileSourceSet: NewSingleFileSourceSet(def.Type, cfg.Roots,
 			WithStreamingFileDiscovery(evenerDiscoverEach),
 			WithFileWatchRoots(evenerWatchRoots),
@@ -23,7 +23,7 @@ func newEvenerProviderFactory(def AgentDef) ProviderFactory {
 			WithFileFingerprint(evenerFingerprintSource),
 			WithFileParse(evenerFileParser(context.Background())),
 		), remote: cfg.PathRewriter != nil}
-	})}
+	})
 }
 
 type evenerSourceSet struct {
@@ -38,9 +38,6 @@ func (s evenerSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 func (s evenerSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
 	for index, root := range s.roots {
 		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if err := ReportRawCaptureDiscoveryProgress(ctx); err != nil {
 			return err
 		}
 		if isS3URI(root) {
@@ -349,11 +346,6 @@ func evenerProviderCapabilities() Capabilities {
 	caps.ForceReplaceOnParse = CapabilitySupported
 	caps.MultiFileStatHash = CapabilitySupported
 	return Capabilities{
-		RawCapture: RawCaptureCapabilities{
-			Support: CapabilitySupported,
-			Shape:   RawCaptureShapeFiles,
-			Append:  RawCaptureAppendMany,
-		},
 		Source: caps,
 		Content: ContentCapabilities{
 			FirstMessage:         CapabilitySupported,
@@ -370,45 +362,17 @@ func evenerProviderCapabilities() Capabilities {
 	}
 }
 
-// The provider adapter exposes physical companions to the existing raw capture
-// pipeline. The source set remains responsible for normalized session parsing.
-type evenerProviderFactory struct{ ProviderFactory }
-
-func (f evenerProviderFactory) NewProvider(cfg ProviderConfig) Provider {
-	return &evenerProvider{f.ProviderFactory.NewProvider(cfg).(*SourceSetProvider)}
-}
-
-type evenerProvider struct{ *SourceSetProvider }
-
-var _ StreamingRawCaptureSourceProvider = (*evenerProvider)(nil)
-
-func (p *evenerProvider) DiscoverRawCaptureSourcesEach(ctx context.Context, yield func(SourceRef) error) (bool, error) {
-	err := p.DiscoverEach(withRawCaptureStreamingTraversal(ctx), yield)
-	return err == nil, err
-}
-
-func (p *evenerProvider) PlanRawCapture(ctx context.Context, source SourceRef) (RawCapturePlan, error) {
-	if err := ctx.Err(); err != nil {
-		return RawCapturePlan{}, err
-	}
+// EvenerSourceFiles lists the transcript and companion files consumed by
+// ordinary remote sync, including one immediate fork parent when available.
+func EvenerSourceFiles(source SourceRef) ([]string, error) {
 	src, ok := source.Opaque.(singleFileSource)
-	if !ok || src.Root == "" || src.Path == "" || isS3URI(src.Root) {
-		return RawCapturePlan{}, invalidRawCapturePlan("evener source is not a local discovered transcript")
+	if source.Provider != AgentEvener || !ok || src.Root == "" || src.Path == "" || isS3URI(src.Root) {
+		return nil, errors.New("evener source is not a local discovered transcript")
 	}
 	if _, ok := evenerClassifyPath(src.Root, src.Path, false); !ok {
-		return RawCapturePlan{}, invalidRawCapturePlan("evener source is outside its configured layout")
+		return nil, errors.New("evener source is outside its configured layout")
 	}
-	captureRoot := src.Root
-	if filepath.Base(captureRoot) == "sessions" {
-		// Retain the sessions directory in custody so discovery recognizes
-		// the layout after materialization under an arbitrary worker root.
-		captureRoot = filepath.Dir(captureRoot)
-	}
-	plan := RawCapturePlan{ConfiguredRoot: src.Root, CaptureRoot: captureRoot, SourceKey: source.Key}
 	paths := []string{src.Path, evenerMetadataPath(src.Path)}
-	// Parsing verifies copied fork history against one immediate parent and
-	// its metadata. Preserve those inputs without following the parent's forks.
-	// Invalid child metadata is still captured; parsing reports its error.
 	if parent, err := evenerParentTranscriptPath(src.Path); err == nil && evenerParentFileInfo(parent) != nil {
 		parentMeta := evenerMetadataPath(parent)
 		info, err := os.Lstat(parentMeta)
@@ -416,25 +380,19 @@ func (p *evenerProvider) PlanRawCapture(ctx context.Context, source SourceRef) (
 			paths = append(paths, parent, parentMeta)
 		}
 	}
+	var files []string
 	for _, path := range paths {
 		info, err := os.Lstat(path)
 		if os.IsNotExist(err) && path != src.Path {
 			continue
 		}
 		if err != nil {
-			return RawCapturePlan{}, err
+			return nil, err
 		}
 		if !info.Mode().IsRegular() {
-			return RawCapturePlan{}, invalidRawCapturePlan("evener capture source is not a regular file")
+			return nil, errors.New("evener source is not a regular file")
 		}
-		rel, err := filepath.Rel(captureRoot, path)
-		if err != nil {
-			return RawCapturePlan{}, err
-		}
-		plan.Entries = append(plan.Entries, RawCaptureEntry{
-			Path: filepath.ToSlash(rel), LocalPath: path,
-			Appendable: strings.HasSuffix(path, evenerTranscriptSuffix),
-		})
+		files = append(files, path)
 	}
-	return plan, nil
+	return files, nil
 }
