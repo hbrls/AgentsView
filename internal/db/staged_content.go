@@ -412,12 +412,6 @@ func (db *DB) replaceSessionContentStaged(
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	queueGenerationBefore, queueExistedBefore, err := artifactExportGenerationTx(
-		tx, sessionID,
-	)
-	if err != nil {
-		return err
-	}
 	// A cold import has no stored rows for stagedSessionContentDigestTx to
 	// find, so contentBefore can only ever prove "changed" against
 	// contentAfter -- skip both full-table scans and go straight to the
@@ -515,11 +509,6 @@ func (db *DB) replaceSessionContentStaged(
 		if err := invalidateSessionSignalsTx(ctx, tx, sessionID); err != nil {
 			return err
 		}
-	}
-	if err := enqueueArtifactExportIfGenerationUnchangedTx(
-		tx, sessionID, queueGenerationBefore, queueExistedBefore,
-	); err != nil {
-		return err
 	}
 	if cp == nil || blobs == nil {
 		if err := deleteParserCheckpointTx(ctx, tx, sessionID); err != nil {

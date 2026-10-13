@@ -102,9 +102,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		machineAuth := isRemoteSyncPath(r.URL.Path) ||
-			(s.artifactExchangeRunner != nil &&
-				isArtifactExchangePath(r.URL.Path))
+		machineAuth := isRemoteSyncPath(r.URL.Path)
 
 		// When auth is not required, skip token checks entirely
 		// except for machine-to-machine remote sync archive APIs,
@@ -167,10 +165,6 @@ func isSSEPath(path string) bool {
 
 func isRemoteSyncPath(path string) bool {
 	return strings.HasPrefix(path, "/api/v1/remote-sync/")
-}
-
-func isArtifactExchangePath(path string) bool {
-	return path == "/api/v1/artifacts/exchange"
 }
 
 // setCORSOnAuthError adds CORS headers to 401 responses so

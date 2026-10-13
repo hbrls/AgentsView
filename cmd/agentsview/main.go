@@ -522,9 +522,6 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	if reloadIngestion != nil {
 		srvOpts = append(srvOpts, server.WithIngestionReloader(reloadIngestion))
 	}
-	srvOpts = append(srvOpts, server.WithArtifactExchangeRunner(
-		newDaemonArtifactExchangeRunner(cfg, database, engine, emitter),
-	))
 	srv := server.New(cfg, database, engine, srvOpts...)
 
 	startupProgress.SetPhase("starting HTTP server")

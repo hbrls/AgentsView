@@ -15,8 +15,6 @@ export * from "./agentTotal.ts";
 export * from "./apiErrorResponse.ts";
 export * from "./applyWorktreeMappingsRequest.ts";
 export * from "./applyWorktreeMappingsResponse.ts";
-export * from "./artifactExchangeRequest.ts";
-export * from "./artifactSyncResult.ts";
 export * from "./batchDeleteInputBody.ts";
 export * from "./branchesResponse.ts";
 export * from "./bulkStarInputBody.ts";

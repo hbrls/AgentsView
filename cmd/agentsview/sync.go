@@ -27,9 +27,8 @@ import (
 
 // SyncConfig holds parsed CLI options for the sync command.
 type SyncConfig struct {
-	Full   bool
-	Host   string
-	Target string
+	Full bool
+	Host string
 	// CPUProfile, MemProfile, and Trace are hidden flags that capture a
 	// pprof CPU profile, allocation snapshot, and runtime trace for the
 	// sync pass. Empty strings disable each independently.
@@ -49,9 +48,6 @@ func runSync(cfg SyncConfig) {
 // db close) so runSync can translate the result into a non-zero
 // exit code without skipping that cleanup.
 func doSync(cfg SyncConfig) (hadRemoteFailures bool) {
-	if err := validateArtifactSyncConfig(cfg); err != nil {
-		fatal("%v", err)
-	}
 	appCfg, err := config.LoadMinimal()
 	if err != nil {
 		log.Fatalf("loading config: %v", err)
@@ -120,19 +116,6 @@ func doSync(cfg SyncConfig) (hadRemoteFailures bool) {
 				if err != nil {
 					fatal("daemon remote sync: %v", err)
 				}
-				if cfg.Target != "" {
-					result, err := runDaemonArtifactExchange(
-						context.Background(),
-						tr,
-						appCfg.AuthToken,
-						cfg.Target,
-						cfg.Full,
-					)
-					if err != nil {
-						fatal("%v", err)
-					}
-					printArtifactSyncSummary(os.Stdout, result)
-				}
 				return len(failures) > 0
 			}
 			if useDaemon {
@@ -174,19 +157,6 @@ func doSync(cfg SyncConfig) (hadRemoteFailures bool) {
 					fatal("daemon sync: %v", err)
 				}
 				printSyncSummary(stats, start)
-				if cfg.Target != "" {
-					result, err := runDaemonArtifactExchange(
-						context.Background(),
-						tr,
-						appCfg.AuthToken,
-						cfg.Target,
-						cfg.Full,
-					)
-					if err != nil {
-						fatal("%v", err)
-					}
-					printArtifactSyncSummary(os.Stdout, result)
-				}
 				return false
 			}
 			// Read-only mirror daemons do not own the local SQLite
@@ -217,17 +187,7 @@ func doSync(cfg SyncConfig) (hadRemoteFailures bool) {
 	}
 
 	if len(appCfg.RemoteHosts) == 0 {
-		if cfg.Target == "" {
-			runLocalSync(context.Background(), appCfg, database, cfg.Full)
-		} else {
-			result, err := runLocalAndArtifactFolderSync(
-				context.Background(), appCfg, database, cfg,
-			)
-			if err != nil {
-				fatal("local sync before artifact exchange: %v", err)
-			}
-			printArtifactSyncSummary(os.Stdout, result)
-		}
+		runLocalSync(context.Background(), appCfg, database, cfg.Full)
 		return false
 	}
 	progress := newRemoteProgressPrinter(os.Stdout, time.Now)
@@ -247,15 +207,6 @@ func doSync(cfg SyncConfig) (hadRemoteFailures bool) {
 			return true
 		}
 		fatal("local sync: %v", blocked)
-	}
-	if cfg.Target != "" {
-		result, err := runArtifactFolderSync(
-			context.Background(), appCfg, database, cfg,
-		)
-		if err != nil {
-			fatal("%v", err)
-		}
-		printArtifactSyncSummary(os.Stdout, result)
 	}
 	return len(failures) > 0
 }

@@ -1846,18 +1846,6 @@ var readOnlyRequiredTables = []string{
 	"recall_query_exposures",
 	"recall_extract_generations",
 	"recall_extract_progress",
-	"artifact_export_queue",
-	"artifact_publications",
-	"artifact_publication_revisions",
-	"artifact_checkpoint_heads",
-	"artifact_checkpoint_floors",
-	"artifact_import_queue",
-	"artifact_import_attempt_generations",
-	"artifact_peer_checkpoint_heads",
-	"artifact_checkpoint_landings",
-	"artifact_checkpoint_stages",
-	"artifact_checkpoint_stage_sessions",
-	"artifact_imported_sessions",
 }
 
 var (
@@ -2196,42 +2184,6 @@ func schemaColumnMigrations() []schemaColumnMigration {
 		{
 			"model_pricing_bands", "cache_creation_1h_microdollars_per_mtok",
 			"ALTER TABLE model_pricing_bands ADD COLUMN cache_creation_1h_microdollars_per_mtok INTEGER NOT NULL DEFAULT 0",
-		},
-		{
-			"artifact_import_queue", "quarantine_pending",
-			"ALTER TABLE artifact_import_queue ADD COLUMN quarantine_pending INTEGER NOT NULL DEFAULT 0",
-		},
-		{
-			"artifact_checkpoint_stages", "pending_count",
-			"ALTER TABLE artifact_checkpoint_stages ADD COLUMN pending_count INTEGER NOT NULL DEFAULT 0",
-		},
-		{
-			"artifact_checkpoint_stages", "decoded_count",
-			"ALTER TABLE artifact_checkpoint_stages ADD COLUMN decoded_count INTEGER NOT NULL DEFAULT 0",
-		},
-		{
-			"artifact_checkpoint_stages", "decode_offset",
-			"ALTER TABLE artifact_checkpoint_stages ADD COLUMN decode_offset INTEGER NOT NULL DEFAULT 0",
-		},
-		{
-			"artifact_checkpoint_stages", "decoder_version",
-			"ALTER TABLE artifact_checkpoint_stages ADD COLUMN decoder_version INTEGER NOT NULL DEFAULT 1",
-		},
-		{
-			"artifact_checkpoint_stage_sessions", "satisfied",
-			"ALTER TABLE artifact_checkpoint_stage_sessions ADD COLUMN satisfied INTEGER NOT NULL DEFAULT 0",
-		},
-		{
-			"artifact_export_queue", "rejected_generation",
-			"ALTER TABLE artifact_export_queue ADD COLUMN rejected_generation INTEGER",
-		},
-		{
-			"artifact_export_queue", "last_error",
-			"ALTER TABLE artifact_export_queue ADD COLUMN last_error TEXT NOT NULL DEFAULT ''",
-		},
-		{
-			"artifact_export_queue", "rejected_at",
-			"ALTER TABLE artifact_export_queue ADD COLUMN rejected_at TEXT",
 		},
 		{
 			"sessions", "display_name",
@@ -2802,129 +2754,6 @@ DROP TRIGGER IF EXISTS artifact_sessions_update_queue;
 DROP TRIGGER IF EXISTS artifact_sessions_delete_queue;
 `
 
-const artifactSessionQueueTriggerCreatesSQL = `
-CREATE TRIGGER IF NOT EXISTS artifact_sessions_insert_queue
-AFTER INSERT ON sessions WHEN (
-    NEW.machine = 'local' OR EXISTS (
-        SELECT 1 FROM pg_sync_state
-        WHERE key IN ('artifact_local_machine_name', 'artifact_local_installation_id')
-          AND value = NEW.machine
-    )
-) AND EXISTS (
-    SELECT 1 FROM pg_sync_state WHERE key = 'artifact_origin_id'
-) BEGIN
-    INSERT INTO artifact_export_queue(session_id) VALUES (NEW.id)
-    ON CONFLICT(session_id) DO UPDATE SET
-        enqueued_at = CASE WHEN pending = 0
-            THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE enqueued_at END,
-        generation = generation + 1,
-        pending = 1,
-        rejected_generation = NULL,
-        last_error = '',
-        rejected_at = NULL;
-END;
-
-CREATE TRIGGER IF NOT EXISTS artifact_sessions_update_queue
-AFTER UPDATE ON sessions
-WHEN (
-    OLD.machine = 'local' OR NEW.machine = 'local' OR EXISTS (
-        SELECT 1 FROM pg_sync_state
-        WHERE key IN ('artifact_local_machine_name', 'artifact_local_installation_id')
-          AND (value = OLD.machine OR value = NEW.machine)
-    )
-) AND EXISTS (
-    SELECT 1 FROM pg_sync_state WHERE key = 'artifact_origin_id'
-) AND (
-    OLD.project IS NOT NEW.project OR
-    OLD.machine IS NOT NEW.machine OR
-    OLD.agent IS NOT NEW.agent OR
-    OLD.agent_label IS NOT NEW.agent_label OR
-    OLD.entrypoint IS NOT NEW.entrypoint OR
-    OLD.session_kind IS NOT NEW.session_kind OR
-    OLD.first_message IS NOT NEW.first_message OR
-    OLD.display_name IS NOT NEW.display_name OR
-    OLD.session_name IS NOT NEW.session_name OR
-    OLD.started_at IS NOT NEW.started_at OR
-    OLD.ended_at IS NOT NEW.ended_at OR
-    OLD.message_count IS NOT NEW.message_count OR
-    OLD.user_message_count IS NOT NEW.user_message_count OR
-    OLD.transcript_revision IS NOT NEW.transcript_revision OR
-    OLD.parent_session_id IS NOT NEW.parent_session_id OR
-    OLD.relationship_type IS NOT NEW.relationship_type OR
-    OLD.total_output_tokens IS NOT NEW.total_output_tokens OR
-    OLD.peak_context_tokens IS NOT NEW.peak_context_tokens OR
-    OLD.has_total_output_tokens IS NOT NEW.has_total_output_tokens OR
-    OLD.has_peak_context_tokens IS NOT NEW.has_peak_context_tokens OR
-    OLD.is_automated IS NOT NEW.is_automated OR
-    OLD.tool_failure_signal_count IS NOT NEW.tool_failure_signal_count OR
-    OLD.tool_retry_count IS NOT NEW.tool_retry_count OR
-    OLD.edit_churn_count IS NOT NEW.edit_churn_count OR
-    OLD.consecutive_failure_max IS NOT NEW.consecutive_failure_max OR
-    OLD.outcome IS NOT NEW.outcome OR
-    OLD.outcome_confidence IS NOT NEW.outcome_confidence OR
-    OLD.ended_with_role IS NOT NEW.ended_with_role OR
-    OLD.final_failure_streak IS NOT NEW.final_failure_streak OR
-    OLD.signals_pending_since IS NOT NEW.signals_pending_since OR
-    OLD.compaction_count IS NOT NEW.compaction_count OR
-    OLD.mid_task_compaction_count IS NOT NEW.mid_task_compaction_count OR
-    OLD.context_pressure_max IS NOT NEW.context_pressure_max OR
-    OLD.health_score IS NOT NEW.health_score OR
-    OLD.health_grade IS NOT NEW.health_grade OR
-    OLD.has_tool_calls IS NOT NEW.has_tool_calls OR
-    OLD.has_context_data IS NOT NEW.has_context_data OR
-    OLD.quality_signal_version IS NOT NEW.quality_signal_version OR
-    OLD.short_prompt_count IS NOT NEW.short_prompt_count OR
-    OLD.unstructured_start IS NOT NEW.unstructured_start OR
-    OLD.missing_success_criteria_count IS NOT NEW.missing_success_criteria_count OR
-    OLD.missing_verification_count IS NOT NEW.missing_verification_count OR
-    OLD.duplicate_prompt_count IS NOT NEW.duplicate_prompt_count OR
-    OLD.no_code_context_count IS NOT NEW.no_code_context_count OR
-    OLD.runaway_tool_loop_count IS NOT NEW.runaway_tool_loop_count OR
-    OLD.data_version IS NOT NEW.data_version OR
-    OLD.cwd IS NOT NEW.cwd OR
-    OLD.git_branch IS NOT NEW.git_branch OR
-    OLD.source_session_id IS NOT NEW.source_session_id OR
-    OLD.source_version IS NOT NEW.source_version OR
-    OLD.transcript_fidelity IS NOT NEW.transcript_fidelity OR
-    OLD.parser_malformed_lines IS NOT NEW.parser_malformed_lines OR
-    OLD.is_truncated IS NOT NEW.is_truncated OR
-    OLD.deleted_at IS NOT NEW.deleted_at OR
-    OLD.created_at IS NOT NEW.created_at OR
-    OLD.termination_status IS NOT NEW.termination_status
-) BEGIN
-    INSERT INTO artifact_export_queue(session_id) VALUES (NEW.id)
-    ON CONFLICT(session_id) DO UPDATE SET
-        enqueued_at = CASE WHEN pending = 0
-            THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE enqueued_at END,
-        generation = generation + 1,
-        pending = 1,
-        rejected_generation = NULL,
-        last_error = '',
-        rejected_at = NULL;
-END;
-
-CREATE TRIGGER IF NOT EXISTS artifact_sessions_delete_queue
-BEFORE DELETE ON sessions WHEN (
-    OLD.machine = 'local' OR EXISTS (
-        SELECT 1 FROM pg_sync_state
-        WHERE key IN ('artifact_local_machine_name', 'artifact_local_installation_id')
-          AND value = OLD.machine
-    )
-) AND EXISTS (
-    SELECT 1 FROM pg_sync_state WHERE key = 'artifact_origin_id'
-) BEGIN
-    INSERT INTO artifact_export_queue(session_id) VALUES (OLD.id)
-    ON CONFLICT(session_id) DO UPDATE SET
-        enqueued_at = CASE WHEN pending = 0
-            THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE enqueued_at END,
-        generation = generation + 1,
-        pending = 1,
-        rejected_generation = NULL,
-        last_error = '',
-        rejected_at = NULL;
-END;
-`
-
 // migrateColumns adds columns introduced by this branch to databases created
 // by older releases, then runs the data repairs required by a normal writable
 // startup. Schema-only callers use applySchemaColumnMigrations directly.
@@ -2953,9 +2782,6 @@ func (db *DB) migrateColumns(ctx context.Context, progress OpenProgressFunc) err
 	}
 	if err := applySchemaColumnMigrations(ctx, w, progress); err != nil {
 		return err
-	}
-	if _, err := w.ExecContext(ctx, artifactSessionQueueTriggerCreatesSQL); err != nil {
-		return fmt.Errorf("installing artifact session queue triggers: %w", err)
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -3199,9 +3025,6 @@ func (db *DB) migrateColumns(ctx context.Context, progress OpenProgressFunc) err
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := requeueInvalidArtifactPublicationsLocked(ctx, w); err != nil {
-		return err
-	}
 
 	runRepair, err := db.shouldRunTokenCoverageRepairLocked(ctx, w)
 	if err != nil {
@@ -3244,178 +3067,6 @@ CREATE TABLE IF NOT EXISTS genai_pricing (
     updated_at TEXT NOT NULL
         DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );`
-
-const (
-	bootstrapArtifactExportQueueSQL = `
-		INSERT OR IGNORE INTO artifact_export_queue(session_id)
-		SELECT id FROM sessions
-		WHERE (
-			machine = 'local' OR machine IN (
-				SELECT value FROM pg_sync_state
-				WHERE key IN ('artifact_local_machine_name', 'artifact_local_installation_id')
-			)
-		) AND deleted_at IS NULL`
-	requeueArtifactExportsSQL = `
-		INSERT INTO artifact_export_queue(session_id)
-		SELECT id FROM sessions
-		WHERE (
-			machine = 'local' OR machine IN (
-				SELECT value FROM pg_sync_state
-				WHERE key IN ('artifact_local_machine_name', 'artifact_local_installation_id')
-			)
-		) AND deleted_at IS NULL
-		ON CONFLICT(session_id) DO UPDATE SET
-			enqueued_at = CASE WHEN pending = 0
-				THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE enqueued_at END,
-			generation = generation + 1,
-			pending = 1,
-			rejected_generation = NULL,
-			last_error = '',
-			rejected_at = NULL`
-	requeueArtifactOriginExportsSQL = `
-		INSERT INTO artifact_export_queue(session_id)
-		SELECT id FROM sessions
-		WHERE (
-			machine = 'local' OR machine IN (
-				SELECT value FROM pg_sync_state
-				WHERE key IN ('artifact_local_machine_name', 'artifact_local_installation_id')
-			)
-		) AND deleted_at IS NULL
-		UNION
-		SELECT session_id FROM artifact_publications
-		WHERE origin = ?
-		ON CONFLICT(session_id) DO UPDATE SET
-			enqueued_at = CASE WHEN pending = 0
-				THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE enqueued_at END,
-			generation = generation + 1,
-			pending = 1,
-			rejected_generation = NULL,
-			last_error = '',
-			rejected_at = NULL`
-)
-
-func requeueInvalidArtifactPublicationsLocked(ctx context.Context, w *writerHandle) error {
-	_, err := w.Exec(ctx, `
-		INSERT INTO artifact_export_queue(session_id)
-		SELECT session_id
-		FROM artifact_publications
-		WHERE origin = (
-			SELECT value FROM pg_sync_state WHERE key = 'artifact_origin_id'
-		) AND (session_id = '' OR instr(session_id, '~') > 0)
-		ON CONFLICT(session_id) DO UPDATE SET
-			enqueued_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
-			generation = artifact_export_queue.generation + 1,
-			pending = 1,
-			rejected_generation = NULL,
-			last_error = '',
-			rejected_at = NULL
-		WHERE artifact_export_queue.pending = 0`)
-	if err != nil {
-		return fmt.Errorf("requeueing invalid artifact publications: %w", err)
-	}
-	return nil
-}
-
-var populateArtifactOriginQueueTx = func(ctx context.Context, tx *sql.Tx, origin string, requeue bool) error {
-	statement := bootstrapArtifactExportQueueSQL
-	action := "bootstrapping"
-	args := []any(nil)
-	if requeue {
-		statement = requeueArtifactOriginExportsSQL
-		action = "requeueing"
-		args = append(args, origin)
-	}
-	if _, err := tx.ExecContext(ctx, statement, args...); err != nil {
-		return fmt.Errorf("%s artifact export queue: %w", action, err)
-	}
-	return nil
-}
-
-// EnsureArtifactOrigin atomically persists candidate when no origin exists and
-// bootstraps every pre-existing local session into the export queue. A
-// concurrent initializer's committed origin wins and is returned unchanged.
-func (db *DB) EnsureArtifactOrigin(ctx context.Context, candidate string) (string, error) {
-	return db.setArtifactOrigin(ctx, candidate, false)
-}
-
-// AdoptArtifactOrigin atomically persists an authoritative configured origin
-// and populates its export queue. Replacing an established origin re-dirties
-// every live local session so clean rows from the previous origin are
-// published again.
-func (db *DB) AdoptArtifactOrigin(ctx context.Context, origin string) error {
-	_, err := db.setArtifactOrigin(ctx, origin, true)
-	return err
-}
-
-func (db *DB) setArtifactOrigin(ctx context.Context, origin string, adopt bool) (string, error) {
-	resolved := origin
-	err := db.Update(ctx, func(tx *sql.Tx) error {
-		if err := lockArtifactPublicationTx(ctx, tx); err != nil {
-			return err
-		}
-		var existing string
-		err := tx.QueryRowContext(ctx,
-			`SELECT value FROM pg_sync_state WHERE key = 'artifact_origin_id'`,
-		).Scan(&existing)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("reading artifact origin: %w", err)
-		}
-		if err == nil && existing != "" {
-			if !adopt || existing == origin {
-				resolved = existing
-				return nil
-			}
-		}
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO pg_sync_state (key, value)
-			 VALUES ('artifact_origin_id', ?)
-			 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-			origin,
-		); err != nil {
-			return fmt.Errorf("persisting artifact origin: %w", err)
-		}
-		if err := populateArtifactOriginQueueTx(ctx, tx, origin, true); err != nil {
-			return err
-		}
-		resolved = origin
-		return nil
-	})
-	if err != nil {
-		return "", err
-	}
-	return resolved, nil
-}
-
-// BootstrapArtifactExportQueue enqueues every live locally-owned session
-// once. Called by maintenance and tests that already own origin lifecycle;
-// normal origin initialization uses EnsureArtifactOrigin so the origin and
-// queue commit atomically.
-func (db *DB) BootstrapArtifactExportQueue(ctx context.Context) error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	_, err := db.getWriter().Exec(ctx, bootstrapArtifactExportQueueSQL)
-	if err != nil {
-		return fmt.Errorf("bootstrapping artifact export queue: %w", err)
-	}
-	return nil
-}
-
-// RequeueAllArtifactExports forces every live locally-owned session pending
-// with a bumped generation. Called when a divergent artifact origin is
-// adopted: BootstrapArtifactExportQueue is INSERT OR IGNORE, so a session
-// already acknowledged (pending=0) under the previous origin would be skipped
-// and never re-verified under the new origin. This re-dirties the ledger so
-// the new origin publishes every owned session. The ON CONFLICT clause matches
-// the session queue triggers' generation semantics.
-func (db *DB) RequeueAllArtifactExports(ctx context.Context) error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	_, err := db.getWriter().Exec(ctx, requeueArtifactExportsSQL)
-	if err != nil {
-		return fmt.Errorf("requeueing artifact export queue: %w", err)
-	}
-	return nil
-}
 
 // syncMarkerSchemaSQL creates the sync_marker index and the triggers that
 // keep it equal to the max of created_at, local_modified_at, ended_at,
@@ -3705,11 +3356,6 @@ func (db *DB) createPartialIndexesLocked(ctx context.Context, w *writerHandle) e
 		ON sessions(agent, file_path, id)
 		WHERE file_path IS NOT NULL AND deleted_at IS NULL`); err != nil {
 		return fmt.Errorf("creating active session source index: %w", err)
-	}
-	if _, err := w.Exec(ctx,
-		`DROP INDEX IF EXISTS idx_artifact_checkpoint_stage_pending`,
-	); err != nil {
-		return fmt.Errorf("dropping superseded artifact stage index: %w", err)
 	}
 	// Superseded by idx_recall_extract_progress_retry (schema.sql), whose
 	// trailing updated_at column serves the same prefix.
@@ -4114,7 +3760,6 @@ func (db *DB) backfillMessageTokenCoverageLocked(ctx context.Context,
 	}
 	defer stmt.Close()
 
-	sessions := make(map[string]struct{})
 	for _, candidate := range candidates {
 		if _, err := stmt.ExecContext(ctx,
 			candidate.hasContext, candidate.hasOutput, candidate.id,
@@ -4123,12 +3768,6 @@ func (db *DB) backfillMessageTokenCoverageLocked(ctx context.Context,
 				"updating message token backfill %d: %w",
 				candidate.id, err,
 			)
-		}
-		sessions[candidate.sessionID] = struct{}{}
-	}
-	for sessionID := range sessions {
-		if err := enqueueArtifactExportTx(tx, sessionID); err != nil {
-			return 0, err
 		}
 	}
 	if err := tx.Commit(); err != nil {

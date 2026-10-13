@@ -51,7 +51,6 @@ filter:
       - post-api-v1-remote-sync-manifest
       - post-api-v1-remote-sync-archive
       - get-api-v1-remote-sync-targets
-      - post-api-v1-artifacts-exchange
       - post-api-v1-export-conversations-initialize
 overlay:
   sources:

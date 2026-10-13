@@ -188,8 +188,6 @@ type Server struct {
 	// telemetryCapture receives UI telemetry events; nil leaves the route unregistered.
 	telemetryCapture http.Handler
 
-	artifactExchangeRunner ArtifactExchangeRunner
-
 	ensurePricing func(context.Context, *db.DB) error
 }
 

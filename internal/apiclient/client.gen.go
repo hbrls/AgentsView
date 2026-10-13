@@ -160,50 +160,6 @@ func (o *GetAPIV1ActivityReportReportIDSessionsRequestOptions) GetHeader() (map[
 	return nil, nil
 }
 
-// PostAPIV1ArtifactsExchangeRequestOptions is the options needed to make a request to PostAPIV1ArtifactsExchange.
-type PostAPIV1ArtifactsExchangeRequestOptions struct {
-	Body *PostAPIV1ArtifactsExchangeBody
-}
-
-// Validate validates all the fields in the options.
-// Use it if fields validation was not run.
-func (o *PostAPIV1ArtifactsExchangeRequestOptions) Validate() error {
-	var errors runtime.ValidationErrors
-
-	if o.Body != nil {
-		if v, ok := any(o.Body).(runtime.Validator); ok {
-			if err := v.Validate(); err != nil {
-				errors = errors.Append("Body", err)
-			}
-		}
-	}
-	if len(errors) == 0 {
-		return nil
-	}
-
-	return errors
-}
-
-// GetPathParams returns the path params as a map.
-func (o *PostAPIV1ArtifactsExchangeRequestOptions) GetPathParams() (map[string]any, error) {
-	return nil, nil
-}
-
-// GetQuery returns the query params as a map.
-func (o *PostAPIV1ArtifactsExchangeRequestOptions) GetQuery() (map[string]any, error) {
-	return nil, nil
-}
-
-// GetBody returns the payload in any type that can be marshalled to JSON by the client.
-func (o *PostAPIV1ArtifactsExchangeRequestOptions) GetBody() any {
-	return o.Body
-}
-
-// GetHeader returns the headers as a map.
-func (o *PostAPIV1ArtifactsExchangeRequestOptions) GetHeader() (map[string]string, error) {
-	return nil, nil
-}
-
 // PostAPIV1DataCompactRequestOptions is the options needed to make a request to PostAPIV1DataCompact.
 type PostAPIV1DataCompactRequestOptions struct {
 	Body *PostAPIV1DataCompactBody
@@ -3667,7 +3623,6 @@ type ClientInterface interface {
 	GetAPIV1ActivityReportWithResponse(ctx context.Context, options *GetAPIV1ActivityReportRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1ActivityReportResp, error)
 	GetAPIV1ActivityReportStreamWithResponse(ctx context.Context, options *GetAPIV1ActivityReportRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1ActivityReportResp, error)
 	GetAPIV1ActivityReportReportIDSessionsWithResponse(ctx context.Context, options *GetAPIV1ActivityReportReportIDSessionsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1ActivityReportReportIDSessionsResp, error)
-	PostAPIV1ArtifactsExchangeWithResponse(ctx context.Context, options *PostAPIV1ArtifactsExchangeRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1ArtifactsExchangeResp, error)
 	PostAPIV1DataCompactWithResponse(ctx context.Context, options *PostAPIV1DataCompactRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1DataCompactResp, error)
 	PostAPIV1EmbeddingsBuildWithResponse(ctx context.Context, options *PostAPIV1EmbeddingsBuildRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1EmbeddingsBuildResp, error)
 	GetAPIV1EmbeddingsGenerationsWithResponse(ctx context.Context, options *GetAPIV1EmbeddingsGenerationsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1EmbeddingsGenerationsResp, error)
@@ -4192,98 +4147,6 @@ func (c *Client) GetAPIV1ActivityReportReportIDSessionsWithResponse(ctx context.
 				}
 			}
 		}
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	default:
-		return out, runtime.NewClientAPIError(fmt.Errorf("unexpected status code: %d", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	}
-}
-
-// PostAPIV1ArtifactsExchange Exchange artifacts with a local folder
-func (c *Client) PostAPIV1ArtifactsExchangeWithResponse(ctx context.Context, options *PostAPIV1ArtifactsExchangeRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1ArtifactsExchangeResp, error) {
-	var err error
-	reqParams := runtime.RequestOptionsParameters{
-		RequestURL:  c.apiClient.GetBaseURL() + "/api/v1/artifacts/exchange",
-		Method:      "POST",
-		Options:     options,
-		ContentType: "application/json",
-	}
-
-	req, err := c.apiClient.CreateRequest(ctx, reqParams, reqEditors...)
-	if err != nil {
-		return nil, fmt.Errorf("error creating request: %w", err)
-	}
-
-	resp, err := c.apiClient.ExecuteRequest(ctx, req, "/api/v1/artifacts/exchange")
-	if err != nil {
-		return nil, fmt.Errorf("error executing request: %w", err)
-	}
-
-	out := &PostAPIV1ArtifactsExchangeResp{
-		HTTPResponse: resp.Raw,
-		Body:         resp.Content,
-		StatusCode:   resp.StatusCode,
-	}
-
-	switch resp.StatusCode {
-	case 200:
-		out.JSON200 = new(PostAPIV1ArtifactsExchangeResponse)
-		bodyBytes := resp.Content
-		if len(bodyBytes) > 0 {
-			if err := json.Unmarshal(bodyBytes, out.JSON200); err != nil {
-				return out, &runtime.ResponseDecodeError{
-					StatusCode:    resp.StatusCode,
-					ContentType:   resp.Headers.Get("Content-Type"),
-					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1ArtifactsExchangeResponse",
-					Body:          bodyBytes,
-					Err:           err,
-				}
-			}
-		}
-		return out, nil
-	case 400:
-		v := PostAPIV1ArtifactsExchangeErrorResponse(resp.Content)
-		out.Text400 = &v
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	case 401:
-		v := PostAPIV1ArtifactsExchangeErrorResponseText(resp.Content)
-		out.Text401 = &v
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	case 403:
-		v := PostAPIV1ArtifactsExchangeErrorResponseText403(resp.Content)
-		out.Text403 = &v
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	case 404:
-		v := PostAPIV1ArtifactsExchangeErrorResponseText404(resp.Content)
-		out.Text404 = &v
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	case 405:
-		v := PostAPIV1ArtifactsExchangeErrorResponseText405(resp.Content)
-		out.Text405 = &v
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	case 413:
-		v := PostAPIV1ArtifactsExchangeErrorResponseText413(resp.Content)
-		out.Text413 = &v
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	case 426:
-		v := PostAPIV1ArtifactsExchangeErrorResponseText426(resp.Content)
-		out.Text426 = &v
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	case 500:
-		v := PostAPIV1ArtifactsExchangeErrorResponseText500(resp.Content)
-		out.Text500 = &v
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	case 501:
-		v := PostAPIV1ArtifactsExchangeErrorResponseText501(resp.Content)
-		out.Text501 = &v
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	case 502:
-		v := PostAPIV1ArtifactsExchangeErrorResponseText502(resp.Content)
-		out.Text502 = &v
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	case 503:
-		v := PostAPIV1ArtifactsExchangeErrorResponseText503(resp.Content)
-		out.Text503 = &v
 		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
 	default:
 		return out, runtime.NewClientAPIError(fmt.Errorf("unexpected status code: %d", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
@@ -12841,8 +12704,6 @@ func (g GetAPIV1SessionsIDWatchPath) Validate() error {
 	return runtime.ConvertValidatorError(typesValidator.Struct(g))
 }
 
-type PostAPIV1ArtifactsExchangeBody = ArtifactExchangeRequest
-
 type PostAPIV1DataCompactBody = DataCompactRequest
 
 type PostAPIV1EmbeddingsBuildBody = EmbeddingsBuildRequest
@@ -13961,34 +13822,6 @@ type GetAPIV1ActivityReportReportIDSessionsErrorResponseJSON503 = APIErrorRespon
 
 type GetAPIV1ActivityReportReportIDSessionsErrorResponseJSON504 = APIErrorResponse
 
-type PostAPIV1ArtifactsExchangeResponse = ArtifactSyncResult
-
-type PostAPIV1ArtifactsExchangeErrorResponse string
-
-func (r PostAPIV1ArtifactsExchangeErrorResponse) Error() string {
-	return "unmapped client error"
-}
-
-type PostAPIV1ArtifactsExchangeErrorResponseText string
-
-type PostAPIV1ArtifactsExchangeErrorResponseText403 string
-
-type PostAPIV1ArtifactsExchangeErrorResponseText404 string
-
-type PostAPIV1ArtifactsExchangeErrorResponseText405 string
-
-type PostAPIV1ArtifactsExchangeErrorResponseText413 string
-
-type PostAPIV1ArtifactsExchangeErrorResponseText426 string
-
-type PostAPIV1ArtifactsExchangeErrorResponseText500 string
-
-type PostAPIV1ArtifactsExchangeErrorResponseText501 string
-
-type PostAPIV1ArtifactsExchangeErrorResponseText502 string
-
-type PostAPIV1ArtifactsExchangeErrorResponseText503 string
-
 type PostAPIV1DataCompactResponse = db.CompactResult
 
 type PostAPIV1DataCompactErrorResponse = APIErrorResponse
@@ -14953,24 +14786,6 @@ type GetAPIV1ActivityReportReportIDSessionsResp struct {
 	JSON504      *GetAPIV1ActivityReportReportIDSessionsErrorResponseJSON504
 }
 
-type PostAPIV1ArtifactsExchangeResp struct {
-	HTTPResponse *http.Response
-	Body         []byte
-	StatusCode   int
-	JSON200      *PostAPIV1ArtifactsExchangeResponse
-	Text400      *PostAPIV1ArtifactsExchangeErrorResponse
-	Text401      *PostAPIV1ArtifactsExchangeErrorResponseText
-	Text403      *PostAPIV1ArtifactsExchangeErrorResponseText403
-	Text404      *PostAPIV1ArtifactsExchangeErrorResponseText404
-	Text405      *PostAPIV1ArtifactsExchangeErrorResponseText405
-	Text413      *PostAPIV1ArtifactsExchangeErrorResponseText413
-	Text426      *PostAPIV1ArtifactsExchangeErrorResponseText426
-	Text500      *PostAPIV1ArtifactsExchangeErrorResponseText500
-	Text501      *PostAPIV1ArtifactsExchangeErrorResponseText501
-	Text502      *PostAPIV1ArtifactsExchangeErrorResponseText502
-	Text503      *PostAPIV1ArtifactsExchangeErrorResponseText503
-}
-
 type PostAPIV1DataCompactResp struct {
 	HTTPResponse *http.Response
 	Body         []byte
@@ -15871,31 +15686,6 @@ func (a APIErrorResponse) Validate() error {
 
 func (s APIErrorResponse) Error() string {
 	return "unmapped client error"
-}
-
-type ArtifactExchangeRequest struct {
-	Full   *bool  `json:"full,omitempty"`
-	Target string `json:"target" validate:"required"`
-}
-
-func (a ArtifactExchangeRequest) Validate() error {
-	return runtime.ConvertValidatorError(typesValidator.Struct(a))
-}
-
-type ArtifactSyncResult struct {
-	ExportedSessions   int64  `json:"exported_sessions"`
-	ImportedMessages   int64  `json:"imported_messages"`
-	ImportedSessions   int64  `json:"imported_sessions"`
-	More               bool   `json:"more"`
-	Origin             string `json:"origin" validate:"required"`
-	PublishedArtifacts int64  `json:"published_artifacts"`
-	Quarantined        int64  `json:"quarantined"`
-	ReceivedArtifacts  int64  `json:"received_artifacts"`
-	RejectedSessions   int64  `json:"rejected_sessions"`
-}
-
-func (a ArtifactSyncResult) Validate() error {
-	return runtime.ConvertValidatorError(typesValidator.Struct(a))
 }
 
 type CacheStats = service.CacheStats

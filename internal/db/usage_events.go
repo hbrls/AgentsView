@@ -92,7 +92,7 @@ func (db *DB) ReplaceSessionUsageEvents(ctx context.Context,
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if err := replaceSessionUsageEventsTx(tx, sessionID, events, true); err != nil {
+	if err := replaceSessionUsageEventsTx(tx, sessionID, events); err != nil {
 		return err
 	}
 
@@ -107,7 +107,6 @@ func replaceSessionUsageEventsTx(
 	tx transactionQueries,
 	sessionID string,
 	events []UsageEvent,
-	enqueueArtifact bool,
 ) error {
 	if _, err := tx.Exec(
 		`DELETE FROM usage_events WHERE session_id = ?`,
@@ -171,11 +170,6 @@ func replaceSessionUsageEventsTx(
 			"bumping local_modified_at for %s after usage replace: %w",
 			sessionID, err,
 		)
-	}
-	if enqueueArtifact {
-		if err := enqueueArtifactExportTx(tx, sessionID); err != nil {
-			return err
-		}
 	}
 	return nil
 }

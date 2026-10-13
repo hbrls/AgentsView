@@ -1170,14 +1170,6 @@ func (db *DB) GetSessionFull(
 	return s, nil
 }
 
-// GetArtifactExportSession returns raw user- and agent-owned session names so
-// canonical manifests do not publish session_name as a user display_name.
-func (db *DB) GetArtifactExportSession(
-	ctx context.Context, id string,
-) (*Session, error) {
-	return db.getSessionFullUncoalesced(ctx, id)
-}
-
 func (db *DB) getSessionFullUncoalesced(
 	ctx context.Context, id string,
 ) (*Session, error) {
@@ -5324,40 +5316,6 @@ func sqliteLikeEscape(value string) string {
 	value = strings.ReplaceAll(value, `%`, `!%`)
 	value = strings.ReplaceAll(value, `_`, `!_`)
 	return value
-}
-
-// ListOwnedSessionIDsForExport returns the IDs of locally-owned, non-deleted
-// sessions for artifact export, ordered by id. Unlike ListSessions it does not
-// apply the sidebar visibility filter (message_count > 0), so zero-message
-// usage-only sessions are still published.
-func (db *DB) ListOwnedSessionIDsForExport(ctx context.Context) ([]string, error) {
-	rows, err := db.getReader().QueryContext(ctx,
-		`SELECT id FROM sessions
-		 WHERE (
-			machine = 'local' OR machine IN (
-				SELECT value FROM pg_sync_state
-				WHERE key IN ('artifact_local_machine_name', 'artifact_local_installation_id')
-			)
-		 ) AND deleted_at IS NULL
-		 ORDER BY id`,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("listing sessions for artifact export: %w", err)
-	}
-	defer rows.Close()
-
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("scanning export session ID: %w", err)
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating export session IDs: %w", err)
-	}
-	return ids, nil
 }
 
 // GetDataVersionByPath returns the minimum data_version for non-source-missing

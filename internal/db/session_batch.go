@@ -495,12 +495,6 @@ func writeOneSessionBatchTx(
 	}
 	replaceMessages := write.ReplaceMessages ||
 		upsertResult.sourceMissing
-	queueGenerationBefore, queueExistedBefore, err := artifactExportGenerationTx(
-		queries, write.Session.ID,
-	)
-	if err != nil {
-		return 0, err
-	}
 	sessionExists := !upsertResult.inserted
 	replacementTranscriptChanged := false
 	if replaceMessages && sessionExists {
@@ -553,7 +547,7 @@ func writeOneSessionBatchTx(
 		}
 	}
 	if err := replaceSessionUsageEventsTx(
-		queries, write.Session.ID, write.UsageEvents, false,
+		queries, write.Session.ID, write.UsageEvents,
 	); err != nil {
 		return 0, err
 	}
@@ -713,11 +707,6 @@ func writeOneSessionBatchTx(
 				return 0, err
 			}
 		}
-	}
-	if err := enqueueArtifactExportIfGenerationUnchangedTx(
-		queries, write.Session.ID, queueGenerationBefore, queueExistedBefore,
-	); err != nil {
-		return 0, err
 	}
 
 	return len(msgs), nil

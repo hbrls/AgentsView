@@ -373,12 +373,6 @@ func newSyncCommandWithRunner(run func(SyncConfig)) *cobra.Command {
 		GroupID:      groupCore,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
-		PreRunE: func(cmd *cobra.Command, _ []string) error {
-			if err := validateArtifactSyncConfig(cfg); err != nil {
-				return err
-			}
-			return nil
-		},
 		Run: func(cmd *cobra.Command, args []string) {
 			run(cfg)
 		},
@@ -390,12 +384,6 @@ func newSyncCommandWithRunner(run func(SyncConfig)) *cobra.Command {
 	cmd.Flags().StringVar(
 		&cfg.Host, "host", "",
 		"Configured HTTP host name",
-	)
-	cmd.Flags().StringVar(
-		&cfg.Target,
-		"target",
-		"",
-		"Exchange normalized session artifacts with a trusted folder",
 	)
 	cmd.Flags().StringVar(
 		&cfg.CPUProfile, "cpuprofile", "",

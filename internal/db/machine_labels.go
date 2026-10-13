@@ -64,7 +64,7 @@ func ResolveMachineFilter(ctx context.Context, store Store, machine string) (str
 	if local, ok := store.(*DB); ok {
 		var identity string
 		err := local.getReader().QueryRowContext(ctx, `SELECT COALESCE(
-			(SELECT value FROM pg_sync_state WHERE key = ?), '')`, artifactLocalInstallationStateKey).Scan(&identity)
+			(SELECT value FROM pg_sync_state WHERE key = ?), '')`, localInstallationStateKey).Scan(&identity)
 		if err != nil {
 			return "", fmt.Errorf("reading local installation identity: %w", err)
 		}
