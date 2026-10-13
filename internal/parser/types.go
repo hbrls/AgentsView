@@ -124,13 +124,6 @@ type AgentDef struct {
 	// Expensive scheduling inputs default to unsupported.
 	PeriodicReconcile bool
 
-	// RemoteSyncExcluded keeps every path under the agent's roots out of
-	// remote sync artifacts: resolve scripts, manifests, archives, delta
-	// roots, and tar commands. Set for stores that co-locate transcripts
-	// with secrets or state that cannot be copied safely; each artifact
-	// seam checks it so exclusion fails closed.
-	RemoteSyncExcluded bool
-
 	// WatchRootsFunc resolves the directories to watch for live
 	// updates under a configured root, for agents whose watch
 	// targets depend on the on-disk layout rather than a static
@@ -389,7 +382,6 @@ var Registry = []AgentDef{
 		// have stored there, and composerData blobs carry per-composer sync
 		// encryption keys. Remote sync stays disabled until there is an
 		// allowlisted export schema, matching Omnigent's chat.db precedent.
-		RemoteSyncExcluded: true,
 		// Watcher events parse only composers whose composerData document
 		// changed, so bubble-only edits rely on the scheduled
 		// fingerprint-gated container reparse.
@@ -516,7 +508,6 @@ var Registry = []AgentDef{
 		// Trae's modern layout stores sessions as encrypted state that a
 		// remote machine cannot read; shipping it would copy opaque
 		// encrypted blobs.
-		RemoteSyncExcluded: true,
 	},
 	{
 		Type:        AgentVSCopilot,
@@ -790,7 +781,6 @@ var Registry = []AgentDef{
 		// the store can retain deleted pages and unrelated state. Remote
 		// sync stays disabled until there is a fresh, allowlisted export
 		// schema, matching the Omnigent chat.db precedent.
-		RemoteSyncExcluded: true,
 	},
 	{
 		Type:        AgentGrok,
@@ -1131,7 +1121,6 @@ var Registry = []AgentDef{
 		// copying or sanitizing the source database can retain deleted
 		// pages. Remote sync stays disabled until Omnigent has a fresh,
 		// allowlisted export schema.
-		RemoteSyncExcluded: true,
 	},
 	{
 		// Codebuff and Freebuff share the same on-disk layout under
@@ -1189,13 +1178,6 @@ func AgentByType(t AgentType) (AgentDef, bool) {
 		}
 	}
 	return AgentDef{}, false
-}
-
-// RemoteSyncExcludedAgent reports whether the agent's raw source tree must
-// stay out of every remote sync artifact. Unknown agents are not excluded.
-func RemoteSyncExcludedAgent(agent AgentType) bool {
-	def, ok := AgentByType(agent)
-	return ok && def.RemoteSyncExcluded
 }
 
 // AgentHasPostAnswerToolWork reports whether the agent may continue calling

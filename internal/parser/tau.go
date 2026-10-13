@@ -144,7 +144,7 @@ func selectTauEntries(entries []tauEntry) ([]tauEntry, error) {
 }
 
 func parseTauSession(
-	ctx context.Context, path, machine string, pathRewriter func(string) string,
+	ctx context.Context, path, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	entries, err := readTauEntries(ctx, path)
 	if err != nil {
@@ -168,7 +168,7 @@ func parseTauSession(
 	info := tauSessionInfo(entries)
 	cwd := info.Get("cwd").Str
 	project := ExtractProjectFromCwdWithBranchContext(ctx, cwd, "")
-	rawID := tauSessionIDFromPathWithRewriter("", path, pathRewriter)
+	rawID := tauSessionIDFromPath("", path)
 	startedAt := tauOuterTimestamp(info.Get("created_at"))
 	if startedAt.IsZero() {
 		startedAt = tauSessionInfoTimestamp(entries)

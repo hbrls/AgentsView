@@ -192,7 +192,6 @@ type cursorSourceSet struct {
 	storeIndex         *cursorStoreIndex
 	resolver           func(string) string
 	resolutionResolver func(string, CursorResolveMode, string) SourceCwdResolution
-	remote             bool
 	remoteRoots        map[string]bool
 }
 
@@ -207,7 +206,6 @@ func newCursorSourceSet(roots []string) cursorSourceSet {
 func newCursorSourceSetWithConfig(cfg ProviderConfig) cursorSourceSet {
 	s := newCursorSourceSet(cfg.Roots)
 	s.metadataDirs = cloneMetadataDirs(cfg.MetadataDirs)
-	s.remote = cfg.PathRewriter != nil
 	for root, machine := range cfg.SourceMachines {
 		if machine != "" && machine != cfg.Machine {
 			s.remoteRoots[filepath.Clean(root)] = true
@@ -229,7 +227,7 @@ func (s cursorSourceSet) resolveCwd(
 		}
 	}
 	var resolution SourceCwdResolution
-	if s.remote || s.remoteRoot(root) {
+	if s.remoteRoot(root) {
 		resolution = SourceCwdResolution{State: SourceCwdRemote}
 	} else if s.resolutionResolver != nil {
 		resolution = s.resolutionResolver(projectDir, mode, hint)
@@ -1049,7 +1047,7 @@ func (s cursorSourceSet) hasRoot(root string) bool {
 }
 
 func (s cursorSourceSet) chatsDirs(root string) []string {
-	if s.remote || s.remoteRoot(root) {
+	if s.remoteRoot(root) {
 		return nil
 	}
 	clean := filepath.Clean(root)

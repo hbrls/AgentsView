@@ -60,13 +60,6 @@ type ProviderConfig struct {
 	// SourceMachines labels configured roots with their source machine. A
 	// provider must treat roots owned by another machine as remote metadata.
 	SourceMachines map[string]string
-	// PathRewriter maps an on-disk source path to its canonical stored form.
-	// It is non-nil only during remote sync, where source files are read
-	// from a temporary extraction directory but must keep a stable identity
-	// across syncs. Providers whose session IDs are derived from the source
-	// path (Aider) use it to seed those IDs from the canonical remote path
-	// rather than the changing temp path. Most providers ignore it.
-	PathRewriter func(string) string
 	// SQLiteContainerListsWatermarkOnly authorizes a shared SQLite container
 	// at dbPath to use its complete-membership, session/project-watermark
 	// listing for this discovery pass. The caller's container gate decides
@@ -1000,9 +993,6 @@ type ParseRequest struct {
 	Fingerprint SourceFingerprint
 	Machine     string
 	ForceParse  bool
-	// StoredPathResolver maps a canonical remote companion path back to the
-	// materialized file used by this parse.
-	StoredPathResolver func(string) (string, bool)
 }
 
 // ParseOutcome is the full-parse provider output. It is meaningful only when

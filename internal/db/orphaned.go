@@ -860,7 +860,6 @@ func (d *DB) CopySessionMetadataFrom(
 				'conversation_publication_revision',
 				'worktree_mapping_publication_revision'
 			)
-			AND key NOT GLOB 'remote_import_data_version:*'
 			ON CONFLICT(key) DO UPDATE SET
 				value = excluded.value,
 				created_at = excluded.created_at,

@@ -39,12 +39,6 @@ type codexStagingSink struct {
 	scratch *sql.DB
 	path    string
 
-	// idPrefix is applied to subagent_session_id at publish time, mirroring
-	// applyRemoteRewrites on the collecting path: staged events are inserted
-	// directly from scratch and never pass through the in-memory rewrite
-	// that prefixes remote (HTTP/S3) session ids.
-	idPrefix string
-
 	toolResultImages config.ToolResultImages
 	database         *db.DB
 
@@ -828,9 +822,7 @@ func (s *codexStagingSink) InsertEventsTx(
 			       CASE WHEN agent_id = '' THEN NULL ELSE agent_id END,
 			       CASE
 			           WHEN subagent_session_id = '' THEN NULL
-			           WHEN ? = '' OR instr(subagent_session_id, ?) = 1
-			               THEN subagent_session_id
-			           ELSE ? || subagent_session_id
+			           ELSE subagent_session_id
 			       END,
 			       source, status,
 			       CASE WHEN blanked = 1 THEN '' ELSE content END,
@@ -842,7 +834,7 @@ func (s *codexStagingSink) InsertEventsTx(
 			WHERE call_key = ?
 			ORDER BY seq`,
 			sessionID, pos.Ordinal, pos.CallIndex,
-			s.idPrefix, s.idPrefix, s.idPrefix, stageKey,
+			stageKey,
 		); err != nil {
 			return fmt.Errorf(
 				"publishing staged events for %s/%s: %w",

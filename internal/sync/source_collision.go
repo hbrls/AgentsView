@@ -28,7 +28,7 @@ func (e *Engine) sourceCollisionID(
 	if !collisionPolicyApplies(provider) {
 		return s.ID, false, nil
 	}
-	fullID := applyIDPrefixToID(e.idPrefix, s.ID)
+	fullID := s.ID
 	records, err := e.sessionPathRecords(ctx, fullID)
 	if err != nil {
 		return "", false, err
@@ -75,20 +75,9 @@ func (e *Engine) sourceCollisionID(
 	return altID, moved, nil
 }
 
-// storedSourceGone requires absence on disk and at the provider. Remote paths
-// must resolve inside a complete mirror; absence from a partial import is not
-// evidence that the remote file is gone.
+// storedSourceGone requires absence on disk and at the provider.
 func (e *Engine) storedSourceGone(ctx context.Context, provider parser.Provider, stored string) bool {
-	if e.pathRewriter != nil {
-		if !e.completeSourceMirror || e.storedPathResolver == nil {
-			return false
-		}
-		resolved, ok := e.storedPathResolver(stored)
-		if !ok {
-			return false
-		}
-		stored = resolved
-	}
+
 	// FindSource may decline a path outside the configured roots. Check the
 	// file itself so an unscanned or unreadable source keeps its identity.
 	if _, err := os.Stat(stored); !os.IsNotExist(err) {
@@ -106,8 +95,8 @@ func collisionPolicyApplies(provider parser.Provider) bool {
 }
 
 // collisionPolicyAgents lists shared-id providers with roots participating in
-// this rebuild, including contributors whose roots are absent locally.
-func (e *Engine) collisionPolicyAgents(contributors []RebuildContributor) []string {
+// this local rebuild.
+func (e *Engine) collisionPolicyAgents() []string {
 	var agents []string
 	add := func(agent parser.AgentType, factory parser.ProviderFactory) {
 		if factory != nil && factory.Capabilities().Source.SharedSessionIDs == parser.CapabilitySupported &&
@@ -119,19 +108,6 @@ func (e *Engine) collisionPolicyAgents(contributors []RebuildContributor) []stri
 	for agent, roots := range sources.agentDirs {
 		if len(roots) > 0 {
 			add(agent, sources.providerFactories[agent])
-		}
-	}
-	for _, contributor := range contributors {
-		cfg := contributor.Config
-		factories := cfg.ProviderFactories
-		if factories == nil {
-			factories = parser.ProviderFactories()
-		}
-		for _, factory := range factories {
-			agent := factory.Definition().Type
-			if len(cfg.AgentDirs[agent]) > 0 && !slices.Contains(cfg.DisabledAgents, agent) {
-				add(agent, factory)
-			}
 		}
 	}
 	return agents
@@ -167,7 +143,7 @@ func (e *Engine) existingAltID(
 	ctx context.Context, provider parser.Provider, records []db.SessionPathRecord,
 	fullID, rawID, lookupPath string,
 ) (string, bool) {
-	minted := applyIDPrefixToID(e.idPrefix, parser.AltSessionID(rawID, lookupPath))
+	minted := parser.AltSessionID(rawID, lookupPath)
 	for _, r := range records {
 		if r.ID != fullID && (r.ID == minted || e.storedSourceLivesAt(ctx, provider, r.FilePath, lookupPath)) {
 			return rawID + r.ID[len(fullID):], r.FilePath != "" && r.FilePath != lookupPath
@@ -209,20 +185,9 @@ func (e *Engine) storedSourceLivesAt(
 	if stored == "" || stored == path {
 		return stored != "" && stored == path
 	}
-	if e.pathRewriter != nil {
-		if !e.completeSourceMirror || e.storedPathResolver == nil {
-			return false
-		}
-		resolved, ok := e.storedPathResolver(stored)
-		if !ok {
-			return false
-		}
-		stored = resolved
-	}
+
 	at, live := e.providerSourcePath(ctx, provider, stored)
-	if live && e.pathRewriter != nil {
-		at = e.pathRewriter(at)
-	}
+
 	return live && at == path
 }
 
@@ -247,15 +212,4 @@ func applyIDPrefixToID(prefix, id string) string {
 		return id
 	}
 	return prefix + id
-}
-
-func applyIDPrefixToIDs(prefix string, ids []string) []string {
-	if prefix == "" || len(ids) == 0 {
-		return ids
-	}
-	prefixed := make([]string, len(ids))
-	for i, id := range ids {
-		prefixed[i] = applyIDPrefixToID(prefix, id)
-	}
-	return prefixed
 }

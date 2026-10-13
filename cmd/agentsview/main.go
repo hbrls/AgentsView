@@ -27,7 +27,6 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/poller"
 	"go.kenn.io/agentsview/internal/recall/extract"
-	"go.kenn.io/agentsview/internal/remotesync"
 	"go.kenn.io/agentsview/internal/secrets"
 	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/signals"
@@ -410,15 +409,10 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 				log.Printf("signals backfill: %v", err)
 			}
 		})
-		validRemotes := true
-		if err := cfg.ValidateRemoteHosts(); err != nil {
-			log.Printf("warning: remote_hosts config invalid, skipping periodic remote sync: %v", err)
-			validRemotes = false
-		}
 		ingestion.StartLiveActivity()
 		go startPeriodicSync(
 			ctx, cfg, ingestion.Config, engine, database, writeLock, idleTracker,
-			validRemotes, emitter,
+			emitter,
 		)
 	} else if opts.ReloadConfig != nil {
 		// Without a background engine the server reconfigures its own
@@ -453,7 +447,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	// upsert so the first usage page load does not observe an
 	// empty table; the scheduler's background LiteLLM refresh
 	// follows immediately.
-	var pricingRefreshRunner remoteSyncExclusiveRunner
+	var pricingRefreshRunner pricingExclusiveRunner
 	if engine != nil {
 		pricingRefreshRunner = engine
 	}
@@ -483,7 +477,6 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		server.WithBaseContext(ctx),
 		server.WithBroadcaster(broadcaster),
 		server.WithIdleTracker(idleTracker),
-		server.WithHTTPRemoteCleanupRegistry(httpRemoteCleanupRegistry),
 		server.WithPprof(opts.Pprof),
 		server.WithTelemetryCapture(telemetryReporter.CaptureHandler()),
 	}
@@ -2879,19 +2872,8 @@ func startPeriodicSync(
 	database *db.DB,
 	lock *writeOwnerLock,
 	idleTracker *server.IdleTracker,
-	validRemotes bool,
 	emitter sync.Emitter,
 ) {
-	if validRemotes {
-		for _, rh := range cfg.RemoteHosts {
-			if rh.Interval > 0 {
-				go startRemoteHostSync(
-					ctx, cfg, database, engine, rh, emitter, idleTracker,
-				)
-			}
-		}
-	}
-
 	// The daily archive audit runs on its own cadence in a worker process; it
 	// must never run the archive-scale pass in the daemon. Its own loop keeps the
 	// scheduled reconcile below (Task 5) untouched.
@@ -3128,119 +3110,6 @@ func runScheduledSyncPass(
 		len(targets), failed, time.Since(started).Round(time.Millisecond),
 		syncLifecycleOutcome(ctx, firstErr),
 	)
-}
-
-func startRemoteHostSync(
-	ctx context.Context,
-	cfg config.Config,
-	database *db.DB,
-	engine *sync.Engine,
-	rh config.RemoteHost,
-	emitter sync.Emitter,
-	idleTracker *server.IdleTracker,
-) {
-	syncFn := remoteHostSyncFunc(
-		ctx, cfg, database, engine, rh,
-		func(
-			ctx context.Context,
-			cfg config.Config,
-			database *db.DB,
-			rh config.RemoteHost,
-			full bool,
-		) (remotesync.SyncStats, error) {
-			return runRemoteSyncTransportWithCleanup(
-				ctx, cfg, database, rh, full, false,
-			)
-		},
-	)
-	runRemoteHostSyncLoop(ctx, rh.Host, rh.Interval, syncFn, emitter, idleTracker, nil)
-}
-
-type remoteSyncExclusiveRunner interface {
-	RunExclusive(func() error) error
-}
-
-type remoteSyncRunner func(
-	context.Context,
-	config.Config,
-	*db.DB,
-	config.RemoteHost,
-	bool,
-) (remotesync.SyncStats, error)
-
-// remoteHostSyncFunc owns the HTTP cleanup registry around the engine lock.
-// Its injected transport must therefore run HTTP without acquiring that
-// registry recursively.
-func remoteHostSyncFunc(
-	ctx context.Context,
-	cfg config.Config,
-	database *db.DB,
-	runner remoteSyncExclusiveRunner,
-	rh config.RemoteHost,
-	runRemote remoteSyncRunner,
-) func() (int, error) {
-	return func() (int, error) {
-		if runner == nil {
-			return 0, errors.New("scheduled remote sync missing exclusive runner")
-		}
-		runExclusive := func() (remotesync.SyncStats, error) {
-			var stats remotesync.SyncStats
-			err := runner.RunExclusive(func() error {
-				var err error
-				stats, err = runRemote(
-					ctx, cfg, database, rh, database.NeedsResync(),
-				)
-				return err
-			})
-			return stats, err
-		}
-		stats, err := httpRemoteCleanupRegistry.Run(runExclusive)
-		return stats.SessionsSynced, err
-	}
-}
-
-// runRemoteHostSyncLoop drives the per-host sync ticker. syncFn returns
-// the number of sessions synced so we only emit when data changed.
-// When done is non-nil, closing it stops the loop.
-func runRemoteHostSyncLoop(
-	ctx context.Context,
-	host string,
-	interval time.Duration,
-	syncFn func() (int, error),
-	emitter sync.Emitter,
-	idleTracker *server.IdleTracker,
-	done <-chan struct{},
-) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-done:
-			return
-		case <-ticker.C:
-		}
-		log.Printf("Running scheduled remote sync for %s...", host)
-		finishWork, ok := idleTracker.BeginWork()
-		if !ok {
-			log.Printf("scheduled remote sync %s skipped: daemon is shutting down", host)
-			continue
-		}
-		var synced int
-		var err error
-		func() {
-			defer finishWork()
-			synced, err = syncFn()
-		}()
-		if err != nil {
-			log.Printf("scheduled remote sync %s: %v", host, err)
-			continue
-		}
-		if synced > 0 && emitter != nil {
-			emitter.Emit("sessions")
-		}
-	}
 }
 
 func recomputePendingSessions(

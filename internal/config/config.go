@@ -678,10 +678,6 @@ func decodeCustomModelPricing(data string) (map[string]CustomModelRate, error) {
 	return decoded.CustomModelPricing, nil
 }
 
-type RemoteTransport string
-
-const RemoteTransportHTTP RemoteTransport = "http"
-
 type ChartPalette string
 
 const (
@@ -745,34 +741,6 @@ func (a ArchiveContent) OmitsToolContent() bool {
 // UsageOnly reports whether the archive keeps only usage accounting rows.
 func (a ArchiveContent) UsageOnly() bool {
 	return a == ArchiveContentUsage
-}
-
-// RemoteHost describes one target for config-driven `agentsview sync`
-// fan-out over HTTP. Host, URL, and Token are required. An omitted Transport
-// selects HTTP. A zero/empty Interval disables periodic remote sync for this host.
-//
-//nolint:recvcheck // Value encoding and pointer decoding intentionally implement distinct interfaces.
-type RemoteHost struct {
-	Host      string          `toml:"host" json:"host"`
-	Transport RemoteTransport `toml:"transport,omitempty" json:"transport,omitempty"`
-	URL       string          `toml:"url,omitempty" json:"url,omitempty"`
-	Token     string          `toml:"token,omitempty" json:"-"`
-	Interval  time.Duration   `toml:"interval,omitempty" json:"interval,omitzero"`
-}
-
-type remoteHostJSON RemoteHost
-
-func (h RemoteHost) MarshalJSONTo(out *jsontext.Encoder) error {
-	return jsonutil.MarshalDurationFields(out, remoteHostJSON(h))
-}
-
-func (h *RemoteHost) UnmarshalJSONFrom(in *jsontext.Decoder) error {
-	var decoded remoteHostJSON
-	if err := jsonutil.UnmarshalDurationFields(in, &decoded); err != nil {
-		return err
-	}
-	*h = RemoteHost(decoded)
-	return nil
 }
 
 // SessionSource adds one agent session root with optional machine attribution.
@@ -890,12 +858,6 @@ type Config struct {
 
 	CustomModelPricing map[string]CustomModelRate `json:"custom_model_pricing,omitempty" toml:"custom_model_pricing"`
 
-	// RemoteHosts is the config-file list of remote targets that
-	// `agentsview sync` (with no --host) syncs after the local
-	// pass. CLI/config-file only; never serialized to the
-	// settings API, so there is no web-UI editing of this list.
-	RemoteHosts []RemoteHost `json:"-" toml:"-"`
-
 	// HostExplicit is true when the user passed --host on the CLI.
 	// Used to prevent auto-bind to 0.0.0.0 when the user
 	// explicitly requested a specific host.
@@ -1004,83 +966,6 @@ func (c *Config) IsUserConfigured(
 	agent parser.AgentType,
 ) bool {
 	return c.agentDirSource[agent] != dirDefault
-}
-
-// ValidateRemoteHosts checks the configured remote_hosts entries
-// for semantic errors. It checks the trimmed values that loadFile
-// already normalized, so what is validated here is exactly what is
-// passed to remote sync. Returns an aggregated error naming every
-// offending entry, or nil when all entries are valid.
-func (c Config) ValidateRemoteHosts() error {
-	var problems []string
-	seen := make(map[string]int, len(c.RemoteHosts))
-	for i, h := range c.RemoteHosts {
-		if h.Host == "" {
-			problems = append(problems,
-				fmt.Sprintf("entry %d: host is required", i+1))
-		}
-		if h.Interval < 0 {
-			problems = append(problems,
-				fmt.Sprintf("entry %d (%q): invalid interval %s",
-					i+1, h.Host, h.Interval))
-		}
-		if h.Transport != "" && h.Transport != RemoteTransportHTTP {
-			problems = append(problems,
-				fmt.Sprintf("entry %d (%q): invalid transport %q; use http with a url and token",
-					i+1, h.Host, h.Transport))
-		}
-		if err := validateRemoteHTTPURL(h.URL); err != nil {
-			problems = append(problems,
-				fmt.Sprintf("entry %d (%q): %v", i+1, h.Host, err))
-		}
-		if h.Token == "" {
-			problems = append(problems,
-				fmt.Sprintf("entry %d (%q): token is required for http", i+1, h.Host))
-		}
-		// Remote sync namespaces sessions and cached state by host.
-		if h.Host != "" {
-			if first, ok := seen[h.Host]; ok {
-				problems = append(problems,
-					fmt.Sprintf("entry %d: duplicate host %q (already at entry %d)",
-						i+1, h.Host, first))
-			} else {
-				seen[h.Host] = i + 1
-			}
-		}
-	}
-	if len(problems) > 0 {
-		return fmt.Errorf("remote_hosts: %s",
-			strings.Join(problems, "; "))
-	}
-	return nil
-}
-
-func validateRemoteHTTPURL(raw string) error {
-	value := strings.TrimSpace(raw)
-	if value == "" {
-		return errors.New("url is required")
-	}
-	u, err := url.Parse(value)
-	if err != nil {
-		return fmt.Errorf("invalid url: %w", err)
-	}
-	scheme := strings.ToLower(u.Scheme)
-	if scheme != "http" && scheme != "https" {
-		return errors.New("url must use http or https")
-	}
-	if u.Hostname() == "" {
-		return errors.New("url must include a host")
-	}
-	if u.User != nil {
-		return errors.New("url must not include userinfo")
-	}
-	if u.RawQuery != "" || u.ForceQuery {
-		return errors.New("url must not include query")
-	}
-	if u.Fragment != "" || u.RawFragment != "" || strings.Contains(value, "#") {
-		return errors.New("url must not include fragment")
-	}
-	return nil
 }
 
 // Default returns a Config with default values.
@@ -1575,7 +1460,6 @@ func (c *Config) applyConfigTOML(data string) error {
 		Agent                          map[string]AgentConfig `toml:"agent"`
 		EventsCoalesceInterval         time.Duration          `toml:"events_coalesce_interval"`
 		DaemonIdleTimeout              time.Duration          `toml:"daemon_idle_timeout"`
-		RemoteHosts                    []RemoteHost           `toml:"remote_hosts"`
 		SessionSources                 []sessionSourceConfig  `toml:"session_sources"`
 	}
 	meta, err := toml.Decode(data, &file)
@@ -1822,19 +1706,6 @@ func (c *Config) applyConfigTOML(data string) error {
 	}
 	if len(customModelPricing) > 0 {
 		c.CustomModelPricing = customModelPricing
-	}
-	if len(file.RemoteHosts) > 0 {
-		hosts := make([]RemoteHost, len(file.RemoteHosts))
-		for i, h := range file.RemoteHosts {
-			hosts[i] = RemoteHost{
-				Host:      strings.TrimSpace(h.Host),
-				Transport: RemoteTransport(strings.TrimSpace(string(h.Transport))),
-				URL:       strings.TrimSpace(h.URL),
-				Token:     strings.TrimSpace(h.Token),
-				Interval:  h.Interval,
-			}
-		}
-		c.RemoteHosts = hosts
 	}
 	if meta.IsDefined("session_sources") {
 		c.sessionSourceConfigs = append([]sessionSourceConfig(nil), file.SessionSources...)

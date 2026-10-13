@@ -2869,19 +2869,6 @@ func (db *DB) migrateColumns(ctx context.Context, progress OpenProgressFunc) err
 	}
 
 	if _, err := w.ExecContext(ctx, `
-		CREATE TABLE IF NOT EXISTS remote_skipped_files (
-			host       TEXT NOT NULL,
-			path       TEXT NOT NULL,
-			file_mtime INTEGER NOT NULL,
-			PRIMARY KEY (host, path)
-		)`,
-	); err != nil {
-		return fmt.Errorf(
-			"creating post-migration tables and indexes: %w", err,
-		)
-	}
-
-	if _, err := w.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS worktree_project_mappings (
 			id          INTEGER PRIMARY KEY,
 			machine     TEXT NOT NULL,

@@ -232,7 +232,6 @@ func (e *Engine) parseDiffProviderSources(
 		Roots:          roots,
 		Machine:        e.machine,
 		SourceMachines: e.sources().sourceMachines[agentType],
-		PathRewriter:   e.pathRewriter,
 	})
 	sources, err := provider.Discover(ctx)
 	if err != nil {
@@ -724,10 +723,8 @@ func (e *Engine) parseDiffCollectFile(
 		prepared, msgs = e.db.ProjectSessionForStorage(prepared, msgs)
 		id := prepared.ID
 		if verdict != sessionWriteOK {
-			// prepareSessionWrite returns a zero session on veto;
-			// reconstruct the final ID the way applyRemoteRewrites
-			// would have.
-			id = e.idPrefix + pw.sess.ID
+			// prepareSessionWrite returns a zero session on veto.
+			id = pw.sess.ID
 		}
 		stored := storedByID[id]
 		if stored != nil {
@@ -939,9 +936,7 @@ func (e *Engine) parseDiffCollectFile(
 		report.Totals.ParseErrors++
 	}
 
-	for _, exID := range e.applyIDPrefixToSessionIDs(
-		job.excludedSessionIDs,
-	) {
+	for _, exID := range job.excludedSessionIDs {
 		stored := storedByID[exID]
 		if stored == nil {
 			continue

@@ -127,24 +127,12 @@ func (p *claudeProvider) Parse(
 	}
 	machine := firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
 	project := claudeProviderProject(ctx, req.Source.ProjectHint, path)
-	var persistedOutputPathResolver func(string) (string, bool)
-	if req.StoredPathResolver != nil {
-		// Stored companions can carry a canonical machine-qualified
-		// spelling (remote mirrors) or the raw recorded path (hosted raw
-		// materializations); try both before falling back to the on-disk
-		// layout, mirroring the shared Claude-layout provider contract.
-		persistedOutputPathResolver = func(path string) (string, bool) {
-			if local, ok := req.StoredPathResolver(path); ok {
-				return local, true
-			}
-			return req.StoredPathResolver(machine + ":" + path)
-		}
-	}
+
 	opts := claudeParseOptions{
-		ctx:                         ctx,
-		siblingLineage:              claudeSourceIsProjectLevel(req.Source, path),
-		persistedOutputPathResolver: persistedOutputPathResolver,
-		aiTitleFallback:             true,
+		ctx:            ctx,
+		siblingLineage: claudeSourceIsProjectLevel(req.Source, path),
+
+		aiTitleFallback: true,
 	}
 	results, excludedIDs, err := claudeParseFile(path, project, machine, opts)
 	if err != nil {

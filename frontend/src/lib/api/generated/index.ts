@@ -14,7 +14,6 @@ export * as PinsService from "./pins/pins.ts";
 export * as PushService from "./push/push.ts";
 export * as RecallService from "./recall/recall.ts";
 export * as RecentEditsService from "./recent-edits/recent-edits.ts";
-export * as RemoteSyncService from "./remote-sync/remote-sync.ts";
 export * as SearchService from "./search/search.ts";
 export * as SecretsService from "./secrets/secrets.ts";
 export * as SessionsService from "./sessions/sessions.ts";

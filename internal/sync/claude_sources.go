@@ -12,7 +12,6 @@ func (e *Engine) localClaudeSubagentSources(pw pendingWrite) []string {
 	// Remote materializations may use temporary paths or another machine's
 	// source keys. Only local ingests can retain filesystem provenance.
 	if pw.sess.Agent != parser.AgentClaude ||
-		e.pathRewriter != nil || e.idPrefix != "" ||
 		!e.isLocalMachineAttribution(pw.sess.Machine) {
 		return nil
 	}
@@ -46,7 +45,7 @@ func (e *Engine) claudeSubagentWriteSources(ctx context.Context, pw pendingWrite
 	if paths == nil || len(paths) > 1 {
 		return paths, nil
 	}
-	stored, err := e.recordedClaudeSubagentSources(ctx, applyIDPrefixToID(e.idPrefix, pw.sess.ID))
+	stored, err := e.recordedClaudeSubagentSources(ctx, pw.sess.ID)
 	if err != nil || len(stored) == 0 {
 		return nil, err
 	}

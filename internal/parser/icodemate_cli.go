@@ -67,17 +67,9 @@ func (s *icodemateCLISourceSet) Parse(
 		req.Source.ProjectHint,
 		filepath.Base(filepath.Dir(path)),
 	), path)
-	var persistedOutputPathResolver func(string) (string, bool)
-	if req.StoredPathResolver != nil {
-		persistedOutputPathResolver = func(path string) (string, bool) {
-			if local, ok := req.StoredPathResolver(path); ok {
-				return local, true
-			}
-			return req.StoredPathResolver(machine + ":" + path)
-		}
-	}
+
 	results, excludedIDs, err := parseIcodemateCLISession(
-		ctx, path, project, machine, persistedOutputPathResolver,
+		ctx, path, project, machine, nil,
 	)
 	if err != nil {
 		return ParseOutcome{}, err
@@ -344,7 +336,6 @@ func parseIcodemateCLISession(
 		path, project, machine,
 		claudeParseOptions{
 			ctx: ctx, compatibleTitleEvents: true,
-			persistedOutputPathResolver: persistedOutputPathResolver,
 		},
 	)
 	if err != nil {

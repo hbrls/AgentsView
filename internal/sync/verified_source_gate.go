@@ -180,7 +180,7 @@ func (e *Engine) verifiedProviderSourceState(
 	source parser.SourceRef,
 	file parser.DiscoveredFile,
 ) (verifiedSourceCapture, int64, bool, bool) {
-	if e.forceParseRequested(file) || e.pathRewriter != nil ||
+	if e.forceParseRequested(file) ||
 		provider.Capabilities().Source.VerifiedLocalStat !=
 			parser.CapabilitySupported {
 		return verifiedSourceCapture{}, 0, false, false
@@ -285,9 +285,6 @@ func (e *Engine) markVerifiedSourceSeen(agent parser.AgentType, path string) {
 // present in the full pre-filter discovery set, including files omitted later
 // by a quick-sync cutoff.
 func (e *Engine) markVerifiedDiscoveredSources(files []parser.DiscoveredFile) {
-	if e.pathRewriter != nil {
-		return
-	}
 	for _, file := range files {
 		if e.verifiedLocalStatSupported(file.Agent) {
 			e.markVerifiedSourceSeen(file.Agent, file.Path)
@@ -299,7 +296,7 @@ func (e *Engine) markVerifiedDiscoveredSources(files []parser.DiscoveredFile) {
 // over a matching stat signature. Only opted-in local providers allocate
 // invalidation records.
 func (e *Engine) invalidateVerifiedDiscoveredSource(file parser.DiscoveredFile) {
-	if e.pathRewriter != nil || !e.verifiedLocalStatSupported(file.Agent) {
+	if !e.verifiedLocalStatSupported(file.Agent) {
 		return
 	}
 	e.invalidateVerifiedSource(file.Agent, filepath.Clean(file.Path))

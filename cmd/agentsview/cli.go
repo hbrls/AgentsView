@@ -362,14 +362,7 @@ func newSyncCommandWithRunner(run func(SyncConfig)) *cobra.Command {
 			"running after this command exits. Stop it with `agentsview daemon stop`.\n\n" +
 			"Incremental local-only sync waits if the default daemon is busy, with\n" +
 			"status and Ctrl+C cancellation. For a one-shot offline run,\n" +
-			"stop the daemon first, then use `AGENTSVIEW_NO_DAEMON=1 agentsview sync`.\n\n" +
-			"With no --host, sync runs the local sync and then fans out to\n" +
-			"every host listed in the [[remote_hosts]] array in config.toml,\n" +
-			"syncing each over HTTP. A failure on one\n" +
-			"configured host is logged and the run continues; the command\n" +
-			"exits non-zero if any configured host failed.\n\n" +
-			"With --host, syncs only the matching configured remote_hosts entry.\n" +
-			"Each remote requires an HTTP URL and its daemon's auth token.",
+			"stop the daemon first, then use `AGENTSVIEW_NO_DAEMON=1 agentsview sync`.",
 		GroupID:      groupCore,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
@@ -380,10 +373,6 @@ func newSyncCommandWithRunner(run func(SyncConfig)) *cobra.Command {
 	cmd.Flags().BoolVar(
 		&cfg.Full, "full", false,
 		"Force a full resync regardless of data version",
-	)
-	cmd.Flags().StringVar(
-		&cfg.Host, "host", "",
-		"Configured HTTP host name",
 	)
 	cmd.Flags().StringVar(
 		&cfg.CPUProfile, "cpuprofile", "",
@@ -760,17 +749,6 @@ func writeRootHelp(w io.Writer, root *cobra.Command) {
 	fmt.Fprintln(w, "  dirs = [\"/codex/a\", \"/codex/b\"]")
 	fmt.Fprintln(w, "  When set, these override default directories. Environment variables")
 	fmt.Fprintln(w, "  override config file arrays.")
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, "Remote hosts:")
-	fmt.Fprintln(w, "  Add a [[remote_hosts]] array to ~/.agentsview/config.toml so that")
-	fmt.Fprintln(w, "  \"agentsview sync\" (no --host) also syncs each configured host:")
-	fmt.Fprintln(w, "  For daemon-backed HTTP sync over a private network such as Tailscale:")
-	fmt.Fprintln(w, "  [[remote_hosts]]")
-	fmt.Fprintln(w, "  host = \"devbox1\"")
-	fmt.Fprintln(w, "  transport = \"http\"")
-	fmt.Fprintln(w, "  url = \"http://devbox1.tailnet.ts.net:8080\"")
-	fmt.Fprintln(w, "  token = \"remote-token\" # required; remote daemon auth_token")
-	fmt.Fprintln(w, "  Each host must be unique.")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "  Top-level daemon_idle_timeout = \"0s\" keeps serve --background nodes alive.")
 	fmt.Fprintln(w)

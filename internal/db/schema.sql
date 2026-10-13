@@ -726,15 +726,6 @@ CREATE TABLE IF NOT EXISTS claude_subagent_sources (
     PRIMARY KEY (session_id, file_path)
 );
 
--- Remote skip cache: tracks file mtimes per remote host
--- for remote sync incremental optimization.
-CREATE TABLE IF NOT EXISTS remote_skipped_files (
-    host       TEXT NOT NULL,
-    path       TEXT NOT NULL,
-    file_mtime INTEGER NOT NULL,
-    PRIMARY KEY (host, path)
-);
-
 CREATE TABLE IF NOT EXISTS worktree_project_mappings (
     id               INTEGER PRIMARY KEY,
     machine          TEXT NOT NULL,

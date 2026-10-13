@@ -144,7 +144,7 @@ func (e *Engine) SyncChangedPathPlanWithOptionsContext(
 		}, syncWriteDefault, collectAndBatchOptions{
 			observeResult: func(job syncJob) {
 				result.FilesProcessed++
-				affectedSessionIDs.observe(job, e.idPrefix)
+				affectedSessionIDs.observe(job)
 				if !job.cachedSkip {
 					return
 				}

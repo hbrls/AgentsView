@@ -475,7 +475,7 @@ func printSyncSummaryStderr(stats sync.SyncStats, t time.Time) {
 // databases without a resync.
 func seedPricing(
 	database *db.DB,
-	runner remoteSyncExclusiveRunner,
+	runner pricingExclusiveRunner,
 ) {
 	err := runPricingExclusive(runner, func() error {
 		return pricingrefresh.SeedFallback(database)

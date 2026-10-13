@@ -86,9 +86,7 @@ func (e *Engine) codexCheckpointFingerprint(
 		return res, nil
 	}
 	lookupPath := path
-	if e.pathRewriter != nil {
-		lookupPath = e.pathRewriter(path)
-	}
+
 	// Resolve the session through the DB so codex-format forks (TraeX)
 	// use their real session id prefix, and use the same row to validate
 	// the checkpoint against the committed offset/ordinal/hash. A
@@ -110,12 +108,7 @@ func (e *Engine) codexCheckpointFingerprint(
 		res.decision = codexCheckpointMissing
 		return res, nil
 	}
-	if e.pathRewriter != nil {
-		// Remote materializations have no trustworthy local identity:
-		// the checkpoint gate cannot stat-trust a rewritten path, so the
-		// caller deep-verifies on every pass.
-		return res, nil
-	}
+
 	if cp.SessionID != inc.ID ||
 		cp.FilePath != e.effectiveSourcePath(path) ||
 		cp.Agent != string(file.Agent) {
