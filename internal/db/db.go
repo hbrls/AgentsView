@@ -3609,6 +3609,23 @@ func (db *DB) createPartialIndexesLocked(ctx context.Context, w *writerHandle) e
 	if !terminalIndexExists {
 		log.Print("building SQLite activity index; startup waits for the tool-result scan to finish")
 	}
+	var recentSourceIndexSQL sql.NullString
+	if err := w.QueryRow(ctx, `
+		SELECT sql FROM sqlite_master
+		WHERE type = 'index' AND name = 'idx_sessions_recent_source_activity'
+	`).Scan(&recentSourceIndexSQL); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("reading recent session source index: %w", err)
+	}
+	normalizedRecentSourceIndexSQL := strings.ToLower(
+		strings.Join(strings.Fields(recentSourceIndexSQL.String), " "),
+	)
+	if recentSourceIndexSQL.Valid && !strings.HasSuffix(normalizedRecentSourceIndexSQL,
+		"where file_path is not null and file_path != '' and deleted_at is null and source_missing_at is null") {
+		log.Print("rebuilding SQLite recent session source index; startup waits for the index scan to finish")
+		if _, err := w.Exec(ctx, `DROP INDEX idx_sessions_recent_source_activity`); err != nil {
+			return fmt.Errorf("dropping stale recent session source index: %w", err)
+		}
+	}
 	indexes := []string{
 		// Activity checks terminal events even for sessions whose ended_at
 		// predates the report. Avoid reading historical result payloads for
@@ -3623,7 +3640,6 @@ func (db *DB) createPartialIndexesLocked(ctx context.Context, w *writerHandle) e
 		`CREATE INDEX IF NOT EXISTS idx_sessions_recent_source_activity
 		 ON sessions(agent, machine, julianday(ended_at) DESC, id)
 		 WHERE file_path IS NOT NULL AND file_path != ''
-		   AND file_path NOT LIKE 's3://%'
 		   AND deleted_at IS NULL AND source_missing_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_project_git_branch
 		 ON sessions(project, git_branch) WHERE git_branch != ''`,

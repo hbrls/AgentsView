@@ -40,9 +40,6 @@ func (s evenerSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef)
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if isS3URI(root) {
-			continue
-		}
 		err := evenerDiscoverEach(ctx, root, func(match singleFileMatch) error {
 			// Compare configured roots rather than retaining every discovered source.
 			for _, earlier := range s.roots[:index] {
@@ -366,7 +363,7 @@ func evenerProviderCapabilities() Capabilities {
 // ordinary remote sync, including one immediate fork parent when available.
 func EvenerSourceFiles(source SourceRef) ([]string, error) {
 	src, ok := source.Opaque.(singleFileSource)
-	if source.Provider != AgentEvener || !ok || src.Root == "" || src.Path == "" || isS3URI(src.Root) {
+	if source.Provider != AgentEvener || !ok || src.Root == "" || src.Path == "" {
 		return nil, errors.New("evener source is not a local discovered transcript")
 	}
 	if _, ok := evenerClassifyPath(src.Root, src.Path, false); !ok {

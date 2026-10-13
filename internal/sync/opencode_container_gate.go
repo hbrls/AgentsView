@@ -7,7 +7,6 @@ import (
 	"maps"
 	"path/filepath"
 	"slices"
-	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -127,7 +126,7 @@ func (e *Engine) captureSQLiteContainerStates(
 		path := filepath.Clean(rawPath)
 		for _, agent := range openCodeFamilySQLiteAgents {
 			for _, dir := range e.sources().agentDirs[agent] {
-				if dir == "" || strings.HasPrefix(dir, "s3://") {
+				if dir == "" {
 					continue
 				}
 				addSQLiteContainerState(
@@ -183,7 +182,7 @@ func (e *Engine) captureAgentSQLiteContainerStates(
 	states map[string]parser.SQLiteContainerState,
 ) {
 	for _, dir := range e.sources().agentDirs[agent] {
-		if dir == "" || strings.HasPrefix(dir, "s3://") {
+		if dir == "" {
 			continue
 		}
 		if !containerDirOverlapsRoots(dir, roots) {
@@ -241,7 +240,7 @@ func openCodeContainerPathForChangedPathEvent(
 		return ""
 	}
 	for _, dir := range roots {
-		if dir == "" || strings.HasPrefix(dir, "s3://") {
+		if dir == "" {
 			continue
 		}
 		if container := openCodeContainerPathForEvent(agent, dir, path); container != "" {

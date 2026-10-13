@@ -3,7 +3,6 @@ package sync
 import (
 	"context"
 	"errors"
-	"strings"
 
 	"go.kenn.io/agentsview/internal/parser"
 )
@@ -20,13 +19,6 @@ func (e *Engine) SyncSessionWithSubagentsContext(
 ) error {
 	parentErr := e.SyncSingleSessionContext(ctx, sessionID)
 
-	// The archive session ID carries its agent prefix (host prefixes are
-	// stripped first), so the parent agent resolves without a row lookup and
-	// stays correct even when the parent is soft-deleted.
-	parentAgent := parser.AgentClaude
-	if def, ok := parser.AgentByPrefix(sessionID); ok {
-		parentAgent = def.Type
-	}
 	sourcePath := e.db.GetSessionFilePath(ctx, sessionID)
 	if sourcePath == "" {
 		sourcePath = e.FindSourceFile(ctx, sessionID)
@@ -36,12 +28,6 @@ func (e *Engine) SyncSessionWithSubagentsContext(
 		return parentErr
 	}
 
-	var subagentErr error
-	if strings.HasPrefix(sourcePath, "s3://") {
-		subagentErr = e.SyncS3SubagentTranscriptsContext(
-			ctx, sessionID, parentAgent, paths)
-	} else {
-		subagentErr = e.SyncPathsContext(ctx, paths)
-	}
+	subagentErr := e.SyncPathsContext(ctx, paths)
 	return errors.Join(parentErr, subagentErr)
 }

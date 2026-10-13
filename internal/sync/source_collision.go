@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"slices"
+	"strings"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
@@ -239,4 +240,22 @@ func (e *Engine) providerSourcePath(
 		return stored, true
 	}
 	return providerDiscoveredPath(source), found
+}
+
+func applyIDPrefixToID(prefix, id string) string {
+	if prefix == "" || id == "" || strings.HasPrefix(id, prefix) {
+		return id
+	}
+	return prefix + id
+}
+
+func applyIDPrefixToIDs(prefix string, ids []string) []string {
+	if prefix == "" || len(ids) == 0 {
+		return ids
+	}
+	prefixed := make([]string, len(ids))
+	for i, id := range ids {
+		prefixed[i] = applyIDPrefixToID(prefix, id)
+	}
+	return prefixed
 }

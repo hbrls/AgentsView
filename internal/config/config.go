@@ -2456,12 +2456,6 @@ func (c *Config) resolveSessionSources() error {
 				fmt.Sprintf("entry %d (%s): session_sources requires a discoverable filesystem provider; %s is import-only", entry, agent, agent))
 			continue
 		}
-		rawDir := strings.TrimSpace(input.Dir)
-		if strings.HasPrefix(strings.ToLower(rawDir), "s3://") {
-			problems = append(problems,
-				fmt.Sprintf("entry %d (%s): dir %q is an S3 root; session_sources supports filesystem roots only, so configure S3 through the existing per-agent directory setting", entry, agent, input.Dir))
-			continue
-		}
 		dir, metadataDir, err := normalizeRuntimeSessionRoot(agent, input.Dir)
 		if err != nil {
 			problems = append(problems,
@@ -2520,9 +2514,6 @@ func (c *Config) resolveSessionSources() error {
 	for agent, roots := range rootsByAgent {
 		machines := make(map[string]string, len(roots))
 		for _, state := range roots {
-			if strings.HasPrefix(strings.ToLower(state.dir), "s3://") {
-				continue
-			}
 			machines[state.dir] = state.machine
 		}
 		sourceMachines[agent] = machines
@@ -2534,9 +2525,6 @@ func (c *Config) resolveSessionSources() error {
 }
 
 func sessionSourceComparisonKey(dir string) (string, error) {
-	if strings.HasPrefix(strings.ToLower(dir), "s3://") {
-		return dir, nil
-	}
 	return pathutil.LocalComparisonKey(dir)
 }
 
@@ -2544,9 +2532,6 @@ func sessionSourceComparisonKey(dir string) (string, error) {
 // absolute path is kept separately for sidecars when only its session
 // directory is linked into another home.
 func normalizeRuntimeSessionRoot(agent parser.AgentType, raw string) (dir, metadataDir string, err error) {
-	if strings.HasPrefix(strings.ToLower(raw), "s3://") {
-		return raw, "", nil
-	}
 	expanded, err := normalizeSessionSourceDir(raw)
 	if err != nil {
 		return "", "", err
@@ -2562,9 +2547,6 @@ func normalizeAgentHomeDir(raw string) (string, error) {
 	if value == "" {
 		return "", errors.New("home is required")
 	}
-	if strings.HasPrefix(strings.ToLower(value), "s3://") {
-		return "", fmt.Errorf("home %q is an S3 root; homes must be local directories, so configure S3 through the per-agent directory setting", raw)
-	}
 	return normalizeSessionSourceDir(value)
 }
 
@@ -2572,6 +2554,9 @@ func normalizeSessionSourceDir(raw string) (string, error) {
 	value := strings.TrimSpace(raw)
 	if value == "" {
 		return "", errors.New("dir is required")
+	}
+	if strings.HasPrefix(strings.ToLower(value), "s3://") {
+		return "", fmt.Errorf("dir %q must be a local filesystem directory; S3 sources are not supported", raw)
 	}
 	if strings.ContainsRune(value, '\x00') {
 		return "", fmt.Errorf("dir %q contains a NUL byte", raw)

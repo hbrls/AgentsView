@@ -52,19 +52,11 @@ func isDirOrSymlink(
 
 // DiscoveredFile holds a discovered session file.
 type DiscoveredFile struct {
-	Path        string
-	Project     string    // pre-extracted project name
-	Agent       AgentType // which agent this file belongs to
-	Machine     string    // source machine override; empty = engine default
-	SourceSize  int64     // source object size for s3:// sources
-	SourceMtime int64     // source object mtime for s3:// sources, UnixNano
-	// TranscriptSize and TranscriptMtime retain the primary JSONL object's
-	// metadata when SourceSize and SourceMtime include persisted-result sidecars.
-	TranscriptSize  int64
-	TranscriptMtime int64
-	// SourceFingerprint is a durable object fingerprint for s3:// sources.
-	SourceFingerprint string
-	ForceParse        bool // caller requires freshness bypass
+	Path       string
+	Project    string    // pre-extracted project name
+	Agent      AgentType // which agent this file belongs to
+	Machine    string    // source machine override; empty = engine default
+	ForceParse bool      // caller requires freshness bypass
 	// ForceFullParse also disables append-only processing so a materialized
 	// replacement cannot be mistaken for bytes appended to the stored source.
 	// A durable skip-cache entry may suppress it after a previous attempt.
@@ -494,16 +486,14 @@ func ResolveCodexShallowWatchRoots(root string) []string {
 // expansion. The name carries no legacy entrypoint verb so the
 // provider can call it without shimming a Discover* free function.
 func ClaudeProjectSessionFiles(projectsDir string) []DiscoveredFile {
-	return projectJSONLSessionFiles(projectsDir, AgentClaude, claudeS3Scanner, nil)
+	return projectJSONLSessionFiles(projectsDir, AgentClaude, nil)
 }
 
 // IcodemateCLIProjectSessionFiles enumerates a terminal CLI projects root in
 // the same Claude-layout terms as ClaudeProjectSessionFiles, labeling every
-// discovered transcript with AgentIcodemate and scanning s3:// roots against
-// the icodemate provider segment (.../raw/icodemate) so machine metadata and
-// source labeling match the owning agent instead of Claude's.
+// discovered transcript with AgentIcodemate.
 func IcodemateCLIProjectSessionFiles(projectsDir string) []DiscoveredFile {
-	return projectJSONLSessionFiles(projectsDir, AgentIcodemate, icodemateCLIS3Scanner, nil)
+	return projectJSONLSessionFiles(projectsDir, AgentIcodemate, nil)
 }
 
 // ProjectJSONLSessionCandidates finds only the requested Claude-layout filename
@@ -512,28 +502,19 @@ func IcodemateCLIProjectSessionFiles(projectsDir string) []DiscoveredFile {
 func ProjectJSONLSessionCandidates(
 	root string, agent AgentType, ids map[string]struct{},
 ) []DiscoveredFile {
-	scanner := claudeS3Scanner
-	if agent == AgentIcodemate {
-		scanner = icodemateCLIS3Scanner
-	}
-	return projectJSONLSessionFiles(root, agent, scanner, ids)
+	return projectJSONLSessionFiles(root, agent, ids)
 }
 
 // projectJSONLSessionFiles walks one Claude-layout projects root
 // (<root>/<project>/*.jsonl plus nested subagents trees) labeling each
-// DiscoveredFile with the owning agent, and routes s3:// roots through the
-// agent's own S3 scanner so the provider segment and agent metadata match.
+// DiscoveredFile with the owning agent.
 // Transient read errors on individual projects are skipped: a project
 // directory echoed by a concurrent watch may disappear mid-walk.
 func projectJSONLSessionFiles(
 	projectsDir string,
 	agent AgentType,
-	scanner func() S3SessionScanner,
 	wanted map[string]struct{},
 ) []DiscoveredFile {
-	if strings.HasPrefix(projectsDir, "s3://") {
-		return s3PrefixScan(projectsDir, scanner())
-	}
 	entries, err := os.ReadDir(projectsDir)
 	if err != nil {
 		return nil
@@ -642,15 +623,11 @@ func projectJSONLSessionFiles(
 // path. Root sessions scan their own subagents tree. A subagent scans its
 // enclosing root's tree so newly written nested descendants can be linked;
 // relationship traversal later limits usage aggregation to the queried
-// session's descendants. An s3:// session lists the equivalent prefix and
-// returns object URIs. Returns nil for a non-Claude path, a path with no such
+// session's descendants. Returns nil for a non-Claude path, a path with no such
 // directory, or an empty path.
 func ClaudeSubagentTranscriptPaths(sessionPath string) []string {
 	if sessionPath == "" || !strings.HasSuffix(sessionPath, ".jsonl") {
 		return nil
-	}
-	if strings.HasPrefix(sessionPath, "s3://") {
-		return claudeS3SubagentTranscriptPaths(sessionPath)
 	}
 	stem := strings.TrimSuffix(filepath.Base(sessionPath), ".jsonl")
 	if stem == "" {

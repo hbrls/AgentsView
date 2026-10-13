@@ -121,7 +121,6 @@ func (e *Engine) SyncChangedPathPlanWithOptionsContext(
 	}()
 	defer e.syncMu.Unlock()
 	defer e.clearCurrentProgress()
-	e.resetS3CodexIndexCache()
 	e.anomalies.reset()
 	var processErr error
 

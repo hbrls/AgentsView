@@ -88,12 +88,6 @@ type SourceCapabilities struct {
 	// in providerStatHashers to avoid short-circuiting every
 	// SourceSet-wrapped agent on a 0==0 digest match.
 	MultiFileStatHash CapabilitySupport
-	// S3Discovery means the provider can enumerate and ingest sessions
-	// from an s3:// root under .../<machine>/raw/<agent>/ and implements
-	// S3Provider. Providers leave this at CapabilityUnsupported unless
-	// they opt in; the sync engine uses the flag instead of a hardcoded
-	// Claude/Codex whitelist.
-	S3Discovery CapabilitySupport
 	// SharedSessionIDs means two of the provider's files can carry the same
 	// session id as separate sessions (Gemini CLI chat segments, Cursor
 	// transcripts copied between projects). The sync engine then keeps the

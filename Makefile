@@ -36,7 +36,7 @@ AIR_BIN := $(shell if command -v air >/dev/null 2>&1; then command -v air; \
 	elif [ -x "$(GOPATH_FIRST)/bin/air" ]; then printf "%s" "$(GOPATH_FIRST)/bin/air"; \
 	fi)
 
-.PHONY: build build-release install install-cjk-fts simple-fts frontend frontend-dev dev check-air air-install desktop-dev desktop-build desktop-macos-app desktop-macos-dmg desktop-windows-installer desktop-linux-appimage desktop-app docs-install docs-build docs-serve docs-check docs-screenshots docs-assets-branch docs-generated-assets-branch docs-deploy-staging docs-deploy test test-short test-evalingest bench-backends bench-gate bench-gate-config bench-pg-usage test-postgres test-postgres-ci test-s3 postgres-up postgres-down e2e memory-e2e vet lint lint-ci lint-golangci lint-golangci-ci nilaway nilaway-golangci-build lint-tools tidy clean release release-darwin-arm64 release-darwin-amd64 release-linux-amd64 install-hooks ensure-embed-dir pricing-snapshot sqlite-vec-header dev-snapshot help
+.PHONY: build build-release install install-cjk-fts simple-fts frontend frontend-dev dev check-air air-install desktop-dev desktop-build desktop-macos-app desktop-macos-dmg desktop-windows-installer desktop-linux-appimage desktop-app docs-install docs-build docs-serve docs-check docs-screenshots docs-assets-branch docs-generated-assets-branch docs-deploy-staging docs-deploy test test-short test-evalingest bench-backends bench-gate bench-gate-config bench-pg-usage test-postgres test-postgres-ci postgres-up postgres-down e2e memory-e2e vet lint lint-ci lint-golangci lint-golangci-ci nilaway nilaway-golangci-build lint-tools tidy clean release release-darwin-arm64 release-darwin-amd64 release-linux-amd64 install-hooks ensure-embed-dir pricing-snapshot sqlite-vec-header dev-snapshot help
 
 # Ensure go:embed has at least one file (no-op if frontend is built)
 ensure-embed-dir:
@@ -416,12 +416,6 @@ test-postgres: pricing-snapshot ensure-embed-dir postgres-up
 test-postgres-ci: pricing-snapshot ensure-embed-dir
 	CGO_ENABLED=1 go test -tags "fts5,pgtest" -v ./internal/postgres/... ./internal/activity/... -count=1 -timeout=20m
 
-# S3 discovery integration tests. testcontainers starts and tears down a
-# rustfs (S3-compatible) container automatically, so only a working Docker
-# daemon is required.
-test-s3: pricing-snapshot ensure-embed-dir
-	CGO_ENABLED=1 go test -tags "fts5,s3test" -v ./internal/sync/... -run TestS3 -count=1
-
 # Local E2E builds enable the mapping workspace. Prebuilt servers must opt in
 # because their embedded frontend may not include the workspace yet.
 PROJECT_MAPPING_WORKSPACE_E2E_ENABLED ?= $(if $(E2E_PREBUILT_SERVER),,true)
@@ -669,7 +663,6 @@ help:
 	@echo "  bench-pg-usage - Run opt-in PostgreSQL usage benchmarks against PG16"
 	@echo "  bench-gate     - Run hot-path benchmarks for local comparison"
 	@echo "  test-postgres  - Run PostgreSQL integration tests"
-	@echo "  test-s3        - Run S3 discovery integration tests (Docker)"
 	@echo "  postgres-up    - Start test PostgreSQL container"
 	@echo "  postgres-down  - Stop test PostgreSQL container"
 	@echo "  e2e            - Run Playwright E2E tests"

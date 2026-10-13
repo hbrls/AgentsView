@@ -7,7 +7,6 @@ import (
 	"hash/fnv"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
@@ -187,7 +186,7 @@ func (e *Engine) verifiedProviderSourceState(
 		return verifiedSourceCapture{}, 0, false, false
 	}
 	path := providerDiscoveredPath(source)
-	if path == "" || strings.HasPrefix(path, "s3://") {
+	if path == "" {
 		return verifiedSourceCapture{}, 0, false, false
 	}
 	path = filepath.Clean(path)

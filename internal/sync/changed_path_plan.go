@@ -307,14 +307,10 @@ func (e *Engine) expandAffectedClaudeDuplicateCandidates(
 		if sessionID == "" {
 			continue
 		}
-		idPrefix := e.idPrefix
-		if isS3SourcePath(file.Path) {
-			idPrefix = s3SessionIDPrefix(file.Machine)
-		}
 		fullID := applyIDPrefixToID(
-			idPrefix, claudeFormatArchiveSessionID(file.Agent, sessionID),
+			e.idPrefix, claudeFormatArchiveSessionID(file.Agent, sessionID),
 		)
-		sessionKey := discoveredFileIDPrefix(file) + "\x00" + fullID
+		sessionKey := fullID
 		if _, seen := seenSessions[sessionKey]; seen {
 			continue
 		}
@@ -450,9 +446,7 @@ func (e *Engine) changedPathDiscoveredFile(
 		Path: path, Project: source.ProjectHint, Agent: agent,
 		ProviderSource: &sourceCopy, ProviderProcess: true,
 	}
-	if !isS3SourcePath(path) {
-		file.Machine = e.machineForProviderSource(agent, source, path)
-	}
+	file.Machine = e.machineForProviderSource(agent, source, path)
 	return file, true
 }
 

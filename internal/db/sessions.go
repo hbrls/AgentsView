@@ -3515,7 +3515,6 @@ const recentSessionSourcesSQL = `
 	FROM sessions
 	WHERE agent = ? AND machine IN %s AND julianday(ended_at) >= julianday(?)
 	  AND file_path IS NOT NULL AND file_path != ''
-	  AND file_path NOT LIKE 's3://%%'
 	  AND deleted_at IS NULL AND source_missing_at IS NULL
 	ORDER BY julianday(ended_at) DESC, id LIMIT ?`
 

@@ -838,10 +838,6 @@ func (s hermesSourceSet) reconciliationScopePlan(
 		if strings.TrimSpace(root) == "" {
 			continue
 		}
-		if strings.HasPrefix(strings.ToLower(root), "s3://") {
-			required = append(required, root)
-			continue
-		}
 		cfg := hermesConfiguredScope{
 			root:  root,
 			match: absoluteHermesPath(root),
@@ -911,8 +907,7 @@ func (s hermesSourceSet) reconciliationScopePlan(
 		}
 	}
 	for _, raw := range req.Roots {
-		if strings.TrimSpace(raw) == "" ||
-			strings.HasPrefix(strings.ToLower(raw), "s3://") {
+		if strings.TrimSpace(raw) == "" {
 			continue
 		}
 		requested := absoluteHermesPath(raw)

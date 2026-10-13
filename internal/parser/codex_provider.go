@@ -17,7 +17,6 @@ import (
 var (
 	_ Provider             = (*codexProvider)(nil)
 	_ ActivityHintProvider = (*codexProvider)(nil)
-	_ S3Provider           = (*codexProvider)(nil)
 )
 
 // codexProviderSpec parameterizes the one shared Codex-format provider
@@ -98,11 +97,7 @@ func (f *codexProviderFactory) Definition() AgentDef {
 }
 
 func (f *codexProviderFactory) Capabilities() Capabilities {
-	caps := codexProviderCapabilities()
-	if f.spec.agent == AgentCodex {
-		caps.Source.S3Discovery = CapabilitySupported
-	}
-	return caps
+	return codexProviderCapabilities()
 }
 
 func (f *codexProviderFactory) NewProvider(cfg ProviderConfig) Provider {
@@ -148,9 +143,6 @@ func (p *codexProvider) ActivityHintSources(
 	for _, root := range p.sources.roots {
 		if err := ctx.Err(); err != nil {
 			return nil, err
-		}
-		if strings.HasPrefix(root, "s3://") {
-			continue
 		}
 		// Alias homes share the transcripts but may keep their own hint
 		// log, so every sidecar directory contributes. Resolve links so a
@@ -626,17 +618,6 @@ func (s codexSourceSet) discoverEachRoot(
 	root string,
 	yield func(SourceRef) error,
 ) error {
-	if strings.HasPrefix(root, "s3://") {
-		if !s.ownsCodexSidecars() {
-			return nil
-		}
-		for _, file := range s3PrefixScan(root, codexS3Scanner()) {
-			if err := yield(s3SourceRefFromDiscoveredFile(root, file)); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
 	return streamDirectoryTree(ctx, root, func(path string, entry os.DirEntry) error {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -670,24 +651,6 @@ func (s codexSourceSet) discover(
 			return nil, err
 		}
 		if !includeRoot(root) {
-			continue
-		}
-		if strings.HasPrefix(root, "s3://") {
-			// s3:// roots have no local layout to walk: enumerate the objects
-			// directly and carry each one's durable metadata in the Opaque
-			// payload. Each object is its own session keyed by URI, so the
-			// live-over-archived preference (which inspects a local codexSource
-			// layout) does not apply here.
-			if !s.ownsCodexSidecars() {
-				continue
-			}
-			for _, file := range s3PrefixScan(root, codexS3Scanner()) {
-				source := s3SourceRefFromDiscoveredFile(root, file)
-				if _, ok := byKey[source.Key]; ok {
-					continue
-				}
-				byKey[source.Key] = source
-			}
 			continue
 		}
 		for _, path := range s.discoverSessionPaths(root) {
@@ -815,9 +778,6 @@ func (s codexSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
 	roots := make([]WatchRoot, 0, len(s.roots)*2)
 	seenShallow := make(map[string]struct{})
 	for _, root := range s.roots {
-		if isS3URI(root) {
-			continue
-		}
 		roots = append(roots, WatchRoot{
 			Path:         root,
 			Recursive:    true,
@@ -964,8 +924,6 @@ func (s codexSourceSet) pathFromSource(source SourceRef) (string, bool) {
 		if src != nil && src.Path != "" {
 			return src.Path, true
 		}
-	case MaterializedFileSource:
-		return src.Path, src.Path != ""
 	}
 	for _, candidate := range []string{
 		source.DisplayPath,
