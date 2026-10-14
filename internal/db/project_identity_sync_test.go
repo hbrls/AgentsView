@@ -123,27 +123,3 @@ func TestPlanProjectIdentityObservationSync(t *testing.T) {
 		})
 	}
 }
-
-func TestCanonicalPushScope(t *testing.T) {
-	for _, scope := range []struct {
-		name                                                     string
-		projects, excluded, reorderedProjects, reorderedExcluded []string
-	}{
-		{name: "nil"},
-		{name: "empty", projects: []string{}, excluded: []string{}},
-		{name: "included and excluded", projects: []string{"b", "a"}, excluded: []string{"y", "x"}, reorderedProjects: []string{"a", "b"}, reorderedExcluded: []string{"x", "y"}},
-		{name: "included only", projects: []string{"b", "a"}, reorderedProjects: []string{"a", "b"}},
-	} {
-		t.Run(scope.name, func(t *testing.T) {
-			got := CanonicalPushScope(scope.projects, scope.excluded)
-			assert.Equal(t, got, CanonicalPushScope(scope.reorderedProjects, scope.reorderedExcluded))
-			if len(scope.projects)+len(scope.excluded) == 0 {
-				assert.Empty(t, got)
-			} else {
-				assert.NotEmpty(t, got)
-			}
-		})
-	}
-	assert.NotEqual(t, CanonicalPushScope([]string{"a"}, nil), CanonicalPushScope([]string{"a", "b"}, nil))
-	assert.NotEqual(t, CanonicalPushScope([]string{"a"}, nil), CanonicalPushScope(nil, []string{"a"}))
-}

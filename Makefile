@@ -36,7 +36,7 @@ AIR_BIN := $(shell if command -v air >/dev/null 2>&1; then command -v air; \
 	elif [ -x "$(GOPATH_FIRST)/bin/air" ]; then printf "%s" "$(GOPATH_FIRST)/bin/air"; \
 	fi)
 
-.PHONY: build build-release install install-cjk-fts simple-fts frontend frontend-dev dev check-air air-install desktop-dev desktop-build desktop-macos-app desktop-macos-dmg desktop-windows-installer desktop-linux-appimage desktop-app docs-install docs-build docs-serve docs-check docs-screenshots docs-assets-branch docs-generated-assets-branch docs-deploy-staging docs-deploy test test-short test-evalingest bench-backends bench-gate bench-gate-config bench-pg-usage test-postgres test-postgres-ci postgres-up postgres-down e2e memory-e2e vet lint lint-ci lint-golangci lint-golangci-ci nilaway nilaway-golangci-build lint-tools tidy clean release release-darwin-arm64 release-darwin-amd64 release-linux-amd64 install-hooks ensure-embed-dir pricing-snapshot sqlite-vec-header dev-snapshot help
+.PHONY: build build-release install install-cjk-fts simple-fts frontend dev check-air air-install desktop-dev desktop-build desktop-macos-app desktop-macos-dmg desktop-windows-installer desktop-linux-appimage desktop-app docs-install docs-build docs-serve docs-check docs-screenshots docs-assets-branch docs-generated-assets-branch docs-deploy-staging docs-deploy test test-short test-evalingest bench-gate bench-gate-config e2e memory-e2e vet lint lint-ci lint-golangci lint-golangci-ci nilaway nilaway-golangci-build lint-tools tidy clean release release-darwin-arm64 release-darwin-amd64 release-linux-amd64 install-hooks ensure-embed-dir pricing-snapshot sqlite-vec-header dev-snapshot help
 
 # Ensure go:embed has at least one file (no-op if frontend is built)
 ensure-embed-dir:
@@ -336,16 +336,6 @@ test-evalingest: pricing-snapshot ensure-embed-dir
 	CGO_ENABLED=1 go test -tags "fts5,evalingest" \
 		./internal/server -v -count=1
 
-# Compare db.Store read-query performance across SQLite and PostgreSQL.
-# Requires Docker because the PostgreSQL backend is started with testcontainers.
-BENCH_BACKENDS_FLAGS ?= -bench . -run '^$$' -benchmem
-BENCH_BACKENDS_SESSIONS ?= 1000
-BENCH_BACKENDS_MESSAGES_PER_SESSION ?= 64
-bench-backends: pricing-snapshot ensure-embed-dir
-	AGENTSVIEW_BENCH_SESSIONS=$(BENCH_BACKENDS_SESSIONS) \
-		AGENTSVIEW_BENCH_MESSAGES_PER_SESSION=$(BENCH_BACKENDS_MESSAGES_PER_SESSION) \
-		CGO_ENABLED=1 go test -tags "fts5,benchdb" ./internal/backendbench $(BENCH_BACKENDS_FLAGS)
-
 # Local hot-path benchmark comparison. Runs every benchmark in these packages
 # (sync engine warm/cold/append, message write paths, usage
 # aggregation, secret scanning, signal analysis). For a local comparison,
@@ -389,32 +379,6 @@ bench-gate: pricing-snapshot ensure-embed-dir
 bench-gate-config:
 	@echo "BENCH_GATE_COUNT=$(BENCH_GATE_COUNT) BENCH_GATE_TIME=$(BENCH_GATE_TIME)"
 	@echo "BENCH_GATE_HEAVY='$(BENCH_GATE_HEAVY)' BENCH_GATE_HEAVY_TIME=$(BENCH_GATE_HEAVY_TIME)"
-
-# Start test PostgreSQL container
-postgres-up:
-	docker compose -f docker-compose.test.yml up -d --wait
-
-# Run opt-in PostgreSQL usage benchmarks against the pinned PG16 service.
-bench-pg-usage: pricing-snapshot
-	docker compose -f docker-compose.test.yml up -d --wait postgres
-	TEST_PG_URL="postgres://agentsview_test:agentsview_test_password@localhost:5433/agentsview_test?sslmode=disable" \
-	CGO_ENABLED=1 go test -tags "fts5,pgtest" ./internal/postgres \
-		-run '^$$' -bench 'BenchmarkPGUsage(Read|Refresh)' -benchmem -count=5
-
-# Stop test PostgreSQL container
-postgres-down:
-	docker compose -f docker-compose.test.yml down
-
-# Run PostgreSQL integration tests (starts postgres automatically)
-test-postgres: pricing-snapshot ensure-embed-dir postgres-up
-	@echo "Waiting for postgres to be ready..."
-	@sleep 2
-	TEST_PG_URL="postgres://agentsview_test:agentsview_test_password@localhost:5433/agentsview_test?sslmode=disable" \
-	CGO_ENABLED=1 go test -tags "fts5,pgtest" -v ./internal/postgres/... ./internal/activity/... -count=1 -timeout=20m
-
-# PostgreSQL integration tests for CI (postgres already running as service)
-test-postgres-ci: pricing-snapshot ensure-embed-dir
-	CGO_ENABLED=1 go test -tags "fts5,pgtest" -v ./internal/postgres/... ./internal/activity/... -count=1 -timeout=20m
 
 # Local E2E builds enable the mapping workspace. Prebuilt servers must opt in
 # because their embedded frontend may not include the workspace yet.
@@ -659,12 +623,7 @@ help:
 	@echo ""
 	@echo "  test           - Run all tests"
 	@echo "  test-short     - Run fast tests only"
-	@echo "  bench-backends - Benchmark SQLite and PostgreSQL stores"
-	@echo "  bench-pg-usage - Run opt-in PostgreSQL usage benchmarks against PG16"
 	@echo "  bench-gate     - Run hot-path benchmarks for local comparison"
-	@echo "  test-postgres  - Run PostgreSQL integration tests"
-	@echo "  postgres-up    - Start test PostgreSQL container"
-	@echo "  postgres-down  - Stop test PostgreSQL container"
 	@echo "  e2e            - Run Playwright E2E tests"
 	@echo "  memory-e2e     - Run opt-in Claude Code and Codex memory recall gate"
 	@echo "  vet            - Run go vet"

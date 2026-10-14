@@ -27,11 +27,6 @@ func TestOrderByClause_MultiKey(t *testing.T) {
 			"COALESCE(NULLIF(started_at, ''), created_at) DESC, id DESC",
 		b.OrderByClause(rs, SessionFilter{}))
 
-	bpg := NewQueryBuilder(PostgresQueryDialect(), 0)
-	assert.Equal(t,
-		"ORDER BY message_count ASC, "+
-			"COALESCE(started_at, created_at) DESC, id DESC",
-		bpg.OrderByClause(rs, SessionFilter{}))
 }
 
 // TestOrderByClause_IDOnly keeps the single id-sort form free of a duplicate id
@@ -60,14 +55,6 @@ func TestCursorPredicate_MultiKey(t *testing.T) {
 	// level 2 (the id tie-break being the last).
 	assert.Len(t, b.Args(), 6)
 
-	bpg := NewQueryBuilder(PostgresQueryDialect(), 0)
-	gotPG := bpg.CursorPredicate(rs, SessionFilter{}, values, "sid")
-	assert.Equal(t, "((message_count > $1::bigint) OR "+
-		"(message_count = $2::bigint AND "+
-		"COALESCE(started_at, created_at) < $3::timestamptz) OR "+
-		"(message_count = $4::bigint AND "+
-		"COALESCE(started_at, created_at) = $5::timestamptz AND id < $6))",
-		gotPG)
 }
 
 // TestCursorPredicate_SingleKeyEquivalentToRowValue documents that the

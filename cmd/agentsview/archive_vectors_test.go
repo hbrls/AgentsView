@@ -30,22 +30,21 @@ func TestUsageOnlyClearsExistingVectorContent(t *testing.T) {
 	// Usage-only gating also applies when vectors are explicitly enabled.
 	cfg.Vector.Enabled = true
 	require.ErrorIs(t, requireVectorEnabled(cfg), db.ErrArchiveContentExcluded)
-	assert.Nil(t, newVectorPushSource(cfg))
 	assert.Nil(t, installDirectVectorSearcher(cfg, database))
 	serving, err := setupVectorServing(t.Context(), cfg, database, nil)
 	require.NoError(t, err)
 	assert.Nil(t, serving.Scheduler)
-	// Read the actual previously built generation: no old content can be exported.
+	// Read the actual previously built generation: no old documents remain indexed.
 	for _, spec := range []vector.IndexSpec{vector.MessageIndexSpec(), vector.RecallIndexSpec()} {
 		ix, err := vector.OpenSpec(t.Context(), cfg.Vector.ResolvedDBPath(cfg.DataDir), spec, true, cfg.Vector.Embeddings.MaxInputChars)
 		require.NoError(t, err)
-		export, ok, err := ix.BeginExport(t.Context(), nil)
+		generations, err := ix.Generations(t.Context())
 		require.NoError(t, err)
-		require.True(t, ok)
-		docs, _, err := export.SessionDocs(t.Context(), "session-1")
-		require.NoError(t, err)
-		assert.Empty(t, docs)
-		require.NoError(t, export.Close())
+		require.NotEmpty(t, generations)
+		for _, generation := range generations {
+			assert.Zero(t, generation.Embedded)
+			assert.Zero(t, generation.Missing)
+		}
 		require.NoError(t, ix.Close())
 	}
 }

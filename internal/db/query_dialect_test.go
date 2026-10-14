@@ -76,33 +76,6 @@ func TestBuildSessionFilterSQLRendersEquivalentDialectFilters(t *testing.T) {
 				"secret_leak_count > 0 AND secrets_rules_version IN (?,?)",
 			},
 		},
-		{
-			name:    "postgres",
-			dialect: PostgresQueryDialect(),
-			wantParts: []string{
-				"message_count > 0",
-				"deleted_at IS NULL",
-				"relationship_type NOT IN ('subagent', 'fork')",
-				"project = $1",
-				"project != $2",
-				"machine IN ($3,$4)",
-				"agent IN ($5,$6)",
-				"COALESCE(ended_at, (SELECT MAX(m.timestamp) FROM messages m WHERE m.session_id = sessions.id AND m.timestamp IS NOT NULL), started_at, created_at) >= $7::timestamptz",
-				"COALESCE(started_at, created_at) < $8::timestamptz",
-				"COALESCE(ended_at, (SELECT MAX(m.timestamp) FROM messages m WHERE m.session_id = sessions.id AND m.timestamp IS NOT NULL), started_at, created_at) >= $9::timestamptz",
-				"COALESCE(started_at, created_at) < $10::timestamptz",
-				"COALESCE(ended_at, (SELECT MAX(m.timestamp) FROM messages m WHERE m.session_id = sessions.id AND m.timestamp IS NOT NULL), started_at, created_at) >= $11::timestamptz",
-				"message_count >= $12",
-				"message_count <= $13",
-				"user_message_count >= $14",
-				"(termination_status = 'clean' OR termination_status = 'awaiting_user')",
-				"(user_message_count > 1 OR is_automated = TRUE)",
-				"outcome IN ($15,$16)",
-				"health_grade IN ($17,$18)",
-				"tool_failure_signal_count >= $19",
-				"secret_leak_count > 0 AND secrets_rules_version IN ($20,$21)",
-			},
-		},
 	}
 	wantArgs := []any{
 		"proj-a", "unknown", "laptop", "server", "claude", "codex",
@@ -143,7 +116,6 @@ func TestBuildSessionFilterSQLResolvesDSTDateBounds(t *testing.T) {
 		dialect QueryDialect
 	}{
 		{name: "sqlite", dialect: SQLiteQueryDialect()},
-		{name: "postgres", dialect: PostgresQueryDialect()},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -171,7 +143,6 @@ func TestBuildSessionFilterSQLRendersIncludeChildrenCTE(t *testing.T) {
 		wantArgs []any
 	}{
 		{"sqlite", SQLiteQueryDialect(), []any{"laptop", "server", "claude"}},
-		{"postgres", PostgresQueryDialect(), []any{"laptop", "server", "claude"}},
 	}
 
 	for _, tt := range tests {
@@ -224,15 +195,6 @@ func TestBuildSessionFilterSQLRendersBranchPairs(t *testing.T) {
 				"agent = ?",
 			},
 		},
-		{
-			name:    "postgres",
-			dialect: PostgresQueryDialect(),
-			wantParts: []string{
-				"machine = $1",
-				"((project = $2 AND git_branch = $3) OR (project = $4 AND git_branch = $5))",
-				"agent = $6",
-			},
-		},
 	}
 
 	for _, tt := range tests {
@@ -269,13 +231,6 @@ func TestSessionCursorFragmentsAreParameterized(t *testing.T) {
 			wantWhere:  `(COALESCE(NULLIF(ended_at, ''), NULLIF(started_at, ''), created_at), id) < (?, ?)`,
 			wantLimit:  "LIMIT ? OFFSET ?",
 		},
-		{
-			name:       "postgres",
-			dialect:    PostgresQueryDialect(),
-			startIndex: 20,
-			wantWhere:  "(COALESCE(ended_at, started_at, created_at), id) < ($21::timestamptz, $22)",
-			wantLimit:  "LIMIT $23 OFFSET $24",
-		},
 	}
 
 	for _, tt := range tests {
@@ -307,13 +262,6 @@ func TestQueryDialectPredicatesKeepUserValuesParameterized(t *testing.T) {
 			dialect:   SQLiteQueryDialect(),
 			wantLike:  "body LIKE ? ESCAPE '\\'",
 			wantRegex: "body REGEXP ?",
-			wantArgs:  []any{"%" + EscapeLikePattern(userPattern) + "%", userRegex},
-		},
-		{
-			name:      "postgres",
-			dialect:   PostgresQueryDialect(),
-			wantLike:  "body ILIKE $1 ESCAPE E'\\\\'",
-			wantRegex: "body ~* $2",
 			wantArgs:  []any{"%" + EscapeLikePattern(userPattern) + "%", userRegex},
 		},
 	}

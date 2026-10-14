@@ -30,10 +30,7 @@ func TestInstallationIdentityIsIndependentOfTelemetryAndDisplayName(t *testing.T
 		assert.Equal(t, id, cfg.SessionSources[0].Machine)
 		assert.Equal(t, "remote-host", cfg.SessionSources[1].Machine)
 		assert.Equal(t, label, cfg.LocalMachineName)
-		cfg.PG.URL = "postgres://localhost/test"
-		pg, err := cfg.ResolvePG()
-		require.NoError(t, err)
-		assert.Equal(t, id, pg.MachineName)
+
 	}
 	writeConfig(t, dir, map[string]any{"cursor_secret": "existing-secret"})
 	cfg, err := LoadMinimal()

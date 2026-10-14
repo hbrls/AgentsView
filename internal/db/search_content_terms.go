@@ -65,13 +65,6 @@ var termsSQLByDialect = map[string]termsSQLFragments{
 		sessionSort:  "COALESCE(s.ended_at, s.started_at, s.created_at, '')",
 		orderBySort:  "julianday(sort_ts) DESC",
 	},
-	"postgres": {
-		systemPrefix: PostgresSystemPrefixSQL,
-		bodyAgg:      `STRING_AGG(content, E'\n' ORDER BY ordinal)`,
-		timestamp:    "m.timestamp",
-		sessionSort:  "COALESCE(s.ended_at, s.started_at, s.created_at)",
-		orderBySort:  "sort_ts DESC NULLS LAST",
-	},
 }
 
 // BuildTermsSearchSQL renders the terms-mode query for a dialect. It groups

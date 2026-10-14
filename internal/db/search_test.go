@@ -74,11 +74,6 @@ func TestIsGoalContextPrefixed(t *testing.T) {
 }
 
 func TestSystemPrefixSQL(t *testing.T) {
-	postgresSQL := PostgresSystemPrefixSQL("content", "role")
-	assert.Contains(t, postgresSQL, "POSITION('</system-reminder>' IN")
-	assert.Contains(t, postgresSQL, "WITH RECURSIVE reminder_remainder")
-	assert.NotContains(t, postgresSQL, "instr(")
-
 	d := testDB(t)
 	rows, err := d.getReader().QueryContext(t.Context(), `
 		WITH candidates(label, role, content) AS (

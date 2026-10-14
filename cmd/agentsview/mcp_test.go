@@ -17,7 +17,6 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/service"
 )
@@ -101,7 +100,7 @@ func TestNewMCPCommand_Wiring(t *testing.T) {
 	assert.True(t, cmd.SilenceUsage)
 
 	for _, name := range []string{
-		"http", "http-allow-insecure", "server", "server-token-file", "pg", "profile",
+		"http", "http-allow-insecure", "server", "server-token-file", "profile",
 	} {
 		assert.NotNil(t, cmd.Flags().Lookup(name), "missing flag --%s", name)
 	}
@@ -170,35 +169,6 @@ func TestRootCommand_RegistersMCP(t *testing.T) {
 		}
 	}
 	assert.True(t, found, "root command should register the mcp subcommand")
-}
-
-func TestResolveMCPServicePGFlagUsesPGReadStore(t *testing.T) {
-	dataDir := newAgentDataDir(t)
-	remoteDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_PG_URL", "postgres://example.test/agentsview")
-	t.Setenv("AGENTSVIEW_PG_SCHEMA", "custom_schema")
-	seedSession(t, dataDir, "local-session", "local")
-	seedSession(t, remoteDir, "pg-session", "remote")
-
-	remoteDB := dbtest.OpenTestDBAt(t, filepath.Join(remoteDir, "sessions.db"))
-	stub := stubPGReadStore(t, remoteDB)
-	forbidStartBackgroundServeForTransport(t,
-		"agentsview mcp --pg must use the PG read store, not the daemon")
-
-	cmd := newMCPCommand()
-	cmd.SetArgs([]string{"--pg"})
-	require.NoError(t, cmd.ParseFlags([]string{"--pg"}))
-
-	svc, cleanup, err := resolveMCPService(cmd)
-	require.NoError(t, err)
-	t.Cleanup(cleanup)
-
-	res, err := svc.List(t.Context(), service.ListFilter{Limit: 10})
-	require.NoError(t, err)
-	require.Len(t, res.Sessions, 1)
-	assert.Equal(t, "pg-session", res.Sessions[0].ID)
-	assert.Equal(t, "postgres://example.test/agentsview", stub.PG.URL)
-	assert.Equal(t, "custom_schema", stub.PG.Schema)
 }
 
 func TestResolveMCPServiceExplicitServerUsesReportedCapabilities(

@@ -119,7 +119,6 @@ func newRootCommand() *cobra.Command {
 	root.AddCommand(newHealthCommand())
 	root.AddCommand(newUsageCommand())
 	root.AddCommand(newActivityCommand())
-	root.AddCommand(newPGCommand())
 	root.AddCommand(newEmbeddingsCommand())
 	root.AddCommand(newSessionCommand())
 	root.AddCommand(newMCPCommand())
@@ -326,7 +325,7 @@ func newOpenAPICommand() *cobra.Command {
 				Version:   version,
 				Commit:    commit,
 				BuildDate: buildDate,
-			}, pushBackendOptions()...)
+			})
 			var data []byte
 			var err error
 			if yamlOutput {
@@ -636,12 +635,6 @@ func newActivityReportCommand() *cobra.Command {
 	return cmd
 }
 
-func newPGCommand() *cobra.Command {
-	return newReplicaCommand(
-		pgReplica{}, newPGVectorsCommand(), newPGServiceCommand(),
-	)
-}
-
 func newVersionCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:          "version",
@@ -724,9 +717,6 @@ func writeRootHelp(w io.Writer, root *cobra.Command) {
 	fmt.Fprintln(w, "  CODEBUDDY_DIR           CodeBuddy data directory")
 	fmt.Fprintln(w, "  PIEBALD_DIR             Piebald data directory")
 	fmt.Fprintln(w, "  AGENTSVIEW_DATA_DIR     Data directory (database, config)")
-	fmt.Fprintln(w, "  AGENTSVIEW_PG_URL       PostgreSQL connection URL for sync")
-	fmt.Fprintln(w, "  AGENTSVIEW_PG_MACHINE   Machine name for PG sync")
-	fmt.Fprintln(w, "  AGENTSVIEW_PG_SCHEMA    PG schema name (default \"agentsview\")")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Watcher excludes:")
 	fmt.Fprintln(w, "  Add \"watch_exclude_patterns\" to ~/.agentsview/config.toml")

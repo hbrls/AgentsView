@@ -41,7 +41,6 @@ func TestRootHelpShowsKeySectionsAndCommands(t *testing.T) {
 		"Usage Commands:",
 		"Other Commands:",
 		"serve                  Start the web UI and sync server",
-		"pg push                Push local data to PostgreSQL",
 		"usage daily            Daily cost summary",
 		"completion             Generate the autocompletion script for the specified shell",
 		"Flags:",
@@ -67,18 +66,6 @@ func TestRootHelpDocumentsCopilotExportDir(t *testing.T) {
 	require.NoError(t, err, "Execute")
 	assert.Contains(t, help,
 		"COPILOT_DIR             Copilot sessions or exported JetBrains Copilot directory")
-}
-
-func TestPGStatusHelpShowsProjectFlags(t *testing.T) {
-	help, err := executeCommand(newRootCommand(), "pg", "status", "--help")
-	require.NoError(t, err, "Execute")
-	for _, want := range []string{
-		"--projects",
-		"--exclude-projects",
-		"--all-projects",
-	} {
-		assert.Contains(t, help, want)
-	}
 }
 
 func TestOpenAPICommandEmitsSpec(t *testing.T) {

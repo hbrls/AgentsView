@@ -17,11 +17,6 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
-// unreachablePGURL points at a deliberately-closed port (1) so
-// postgres.Open returns quickly without blocking the test.
-const unreachablePGURL = "postgres://nobody:nobody@127.0.0.1:1/" +
-	"nonexistent?sslmode=disable&connect_timeout=2"
-
 // classifierFixture owns the per-test data dir and the config
 // wired to it. Construct it with newClassifierFixture.
 type classifierFixture struct {
@@ -54,18 +49,6 @@ func newClassifierFixture(
 		db.SetUserAutomationExactMatches(nil)
 	})
 	return classifierFixture{Dir: dir, Cfg: cfg}
-}
-
-// withUnreachablePG configures a PG URL that cannot be reached so
-// tests can exercise the PG cleanup path without a live database.
-func withUnreachablePG(cfg *config.Config) {
-	cfg.PG.URL = unreachablePGURL
-	cfg.PG.AllowInsecure = true
-}
-
-// withoutPG clears any configured PG URL.
-func withoutPG(cfg *config.Config) {
-	cfg.PG.URL = ""
 }
 
 // writeAutomatedPrefixesConfig writes a config.toml under dir with
@@ -118,21 +101,21 @@ func classifierHashInSQLite(t *testing.T, dbPath string) string {
 // runClassifierRebuildTest runs runClassifierRebuild against cfg,
 // returning captured output and any error.
 func runClassifierRebuildTest(
-	t *testing.T, cfg config.Config, includePG bool,
+	t *testing.T, cfg config.Config,
 ) (string, error) {
 	t.Helper()
 	out := &bytes.Buffer{}
-	err := runClassifierRebuild(t.Context(), cfg, out, includePG)
+	err := runClassifierRebuild(t.Context(), cfg, out)
 	return out.String(), err
 }
 
 // requireClassifierRebuild runs the rebuild and asserts it succeeds,
 // returning the captured output.
 func requireClassifierRebuild(
-	t *testing.T, cfg config.Config, includePG bool,
+	t *testing.T, cfg config.Config,
 ) string {
 	t.Helper()
-	out, err := runClassifierRebuildTest(t, cfg, includePG)
+	out, err := runClassifierRebuildTest(t, cfg)
 	require.NoError(t, err, "rebuild")
 	return out
 }
@@ -143,7 +126,7 @@ func TestClassifierRebuildClearsSQLiteHash(t *testing.T) {
 	require.NotEmpty(t, classifierHashInSQLite(t, fx.Cfg.DBPath),
 		"precondition: expected stored hash, got empty")
 
-	requireClassifierRebuild(t, fx.Cfg, false)
+	requireClassifierRebuild(t, fx.Cfg)
 
 	assert.Empty(t, classifierHashInSQLite(t, fx.Cfg.DBPath),
 		"expected hash cleared")
@@ -157,7 +140,7 @@ func TestClassifierRebuildPrintsLoadedPrefixes(t *testing.T) {
 	fx := newClassifierFixture(t, prefixes)
 	seedClassifierHash(t, fx.Cfg)
 
-	got := requireClassifierRebuild(t, fx.Cfg, false)
+	got := requireClassifierRebuild(t, fx.Cfg)
 	for _, p := range prefixes {
 		assert.Contains(t, got, p, "output missing %q", p)
 	}
@@ -210,50 +193,9 @@ func TestClassifierRebuildRefusesBackgroundLaunchLock(t *testing.T) {
 	require.True(t, ok)
 	t.Cleanup(func() { require.NoError(t, launchLock.Unlock()) })
 
-	_, err := runClassifierRebuildTest(t, fx.Cfg, false)
+	_, err := runClassifierRebuildTest(t, fx.Cfg)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "daemon launch is in progress")
-}
-
-// TestClassifierRebuildSkipsConfiguredPGByDefault confirms that
-// configured sync PG is not touched by the local recovery command
-// unless the caller explicitly opts in.
-func TestClassifierRebuildSkipsConfiguredPGByDefault(t *testing.T) {
-	fx := newClassifierFixture(t, nil, withUnreachablePG)
-	seedClassifierHash(t, fx.Cfg)
-
-	requireClassifierRebuild(t, fx.Cfg, false)
-}
-
-// TestClassifierRebuildPGFlagHardFailsOnPGUnreachable confirms
-// that when PG cleanup is explicitly requested and the connection
-// fails, runClassifierRebuild returns an error instead of silently
-// skipping the PG delete.
-func TestClassifierRebuildPGFlagHardFailsOnPGUnreachable(t *testing.T) {
-	fx := newClassifierFixture(t, nil, withUnreachablePG)
-	seedClassifierHash(t, fx.Cfg)
-
-	_, err := runClassifierRebuildTest(t, fx.Cfg, true)
-	require.Error(t, err, "expected error for unreachable PG")
-	lower := strings.ToLower(err.Error())
-	assert.Contains(t, lower, "pg",
-		"error should mention PG, got: %v", err)
-	// Lock the spec contract: the error must surface the
-	// 'pg push --full' remediation hint so a future refactor
-	// can't silently drop it.
-	assert.Contains(t, err.Error(), "pg push --full",
-		"error should mention 'pg push --full' remediation")
-}
-
-// TestClassifierRebuildSkipsPGWhenNotConfigured verifies the
-// silent-skip path: when pg.url is empty, the command does
-// NOT attempt PG cleanup and returns nil even if PG would
-// otherwise be unreachable.
-func TestClassifierRebuildSkipsPGWhenNotConfigured(t *testing.T) {
-	fx := newClassifierFixture(t, nil, withoutPG)
-	seedClassifierHash(t, fx.Cfg)
-
-	requireClassifierRebuild(t, fx.Cfg, false)
 }
 
 // TestClassifierCommandIsHidden pins the UX decision that the

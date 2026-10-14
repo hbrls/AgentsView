@@ -13,14 +13,12 @@ type placeholderStyle int
 
 const (
 	placeholderQuestion placeholderStyle = iota
-	placeholderDollar
 )
 
 type timestampKind int
 
 const (
 	timestampUnixSeconds timestampKind = iota
-	timestampTimestamptz
 )
 
 // QueryDialect captures the small set of SQL syntax differences needed by
@@ -116,51 +114,7 @@ func SQLiteQueryDialect() QueryDialect {
 	}
 }
 
-// PostgresQueryDialect returns the PostgreSQL SQL fragments used by the
-// read-only shared store.
-func PostgresQueryDialect() QueryDialect {
-	return QueryDialect{
-		name:             "postgres",
-		placeholderStyle: placeholderDollar,
-		trueLiteral:      "TRUE",
-		falseLiteral:     "FALSE",
-		dateStartExpr: func(q func(string) string) string {
-			return "COALESCE(" + q("started_at") + ", " +
-				q("created_at") + ")"
-		},
-		dateEndExpr: func(q func(string) string) string {
-			return "COALESCE(" + q("ended_at") +
-				", (SELECT MAX(m.timestamp) FROM messages m" +
-				" WHERE m.session_id = " + outerSessionID(q) +
-				" AND m.timestamp IS NOT NULL), " + q("started_at") +
-				", " + q("created_at") + ")"
-		},
-		dateParam: func(ph string) string { return ph + "::timestamptz" },
-		activityParam: func(ph string) string {
-			return ph + "::timestamptz"
-		},
-		cursorActivityExpr: "COALESCE(ended_at, started_at, created_at)",
-		cursorParam: func(ph string) string {
-			return ph + "::timestamptz"
-		},
-		castCursor:             pgCastCursor,
-		terminationExpr:        "COALESCE(ended_at, started_at, created_at)",
-		terminationKind:        timestampTimestamptz,
-		caseInsensitiveLike:    "ILIKE",
-		caseInsensitiveLikeEsc: `ESCAPE E'\\'`,
-		regexPredicate: func(col, ph string) string {
-			return col + " ~* " + ph
-		},
-		sidebarChildRelationships:   []string{"subagent", "fork"},
-		canonicalChildRelationships: []string{"subagent", "fork", "continuation"},
-		nullsLast:                   true,
-	}
-}
-
 func (d QueryDialect) placeholder(n int) string {
-	if d.placeholderStyle == placeholderDollar {
-		return fmt.Sprintf("$%d", n)
-	}
 	return "?"
 }
 
@@ -250,19 +204,6 @@ func (b *QueryBuilder) CursorBeforePredicate(cur SessionCursor) string {
 	ea := b.dialect.cursorParam(b.Add(cur.EndedAt))
 	id := b.Add(cur.ID)
 	return "(" + b.dialect.cursorActivityExpr + ", id) < (" + ea + ", " + id + ")"
-}
-
-func pgCastCursor(ph string, kind valueKind) string {
-	switch kind {
-	case kindTimestamp:
-		return ph + "::timestamptz"
-	case kindInt:
-		return ph + "::bigint"
-	case kindReal:
-		return ph + "::double precision"
-	default:
-		return ph
-	}
 }
 
 // timestampExpr returns a column reference that treats unset timestamps as NULL.
@@ -846,8 +787,6 @@ func (b *QueryBuilder) terminationParam(t time.Time) string {
 	switch b.dialect.terminationKind {
 	case timestampUnixSeconds:
 		return b.Add(t.Unix())
-	case timestampTimestamptz:
-		return b.Add(t)
 	default:
 		return b.dialect.activityParam(b.Add(t))
 	}

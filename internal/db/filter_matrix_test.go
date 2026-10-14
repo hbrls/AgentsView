@@ -18,17 +18,9 @@ type filterMatrixDialect struct {
 
 var filterMatrixDialects = []filterMatrixDialect{
 	{"sqlite", SQLiteQueryDialect(), "1", "0", "COALESCE(NULLIF(s.ended_at, ''), NULLIF(s.started_at, ''), s.created_at) >= ?", "m.id = tc.message_id", `tc.file_path LIKE ? ESCAPE '\'`},
-	{"postgres", PostgresQueryDialect(), "TRUE", "FALSE", "COALESCE(s.ended_at, s.started_at, s.created_at) >= ?::timestamptz", "m.session_id = tc.session_id AND m.ordinal = tc.message_ordinal", `tc.file_path ILIKE ? ESCAPE E'\\'`},
 }
 
 func matrixSQL(d filterMatrixDialect, sql string, offset int) string {
-	if d.name != "postgres" {
-		return sql
-	}
-	for strings.Contains(sql, "?") {
-		offset++
-		sql = strings.Replace(sql, "?", fmt.Sprintf("$%d", offset), 1)
-	}
 	return sql
 }
 

@@ -115,7 +115,7 @@ Add to your MCP client config (e.g. Claude Desktop):
 				opts.Token = token
 				opts.DiscoveryDirectory = filepath.Join(cfg.DataDir, "mcp")
 				opts.BackendURL, _ = cmd.Flags().GetString("server")
-				if opts.BackendURL == "" && !pgReadRequested(cmd) {
+				if opts.BackendURL == "" {
 					if runtime := FindDaemonRuntime(cfg.DataDir, cfg.AuthToken); runtime != nil {
 						opts.BackendURL = urlFromDaemonRuntime(runtime)
 					}
@@ -150,8 +150,6 @@ Add to your MCP client config (e.g. Claude Desktop):
 	cmd.Flags().String("server", "", "Remote daemon URL")
 	cmd.Flags().String("server-token-file", "",
 		"File containing bearer token for explicit --server requests")
-	cmd.Flags().Bool("pg", false,
-		"Read session data from configured PostgreSQL")
 	cmd.Flags().StringVar(&profileName, "profile", string(mcpserver.ProfileFull),
 		"Tool profile to advertise (full or memory)")
 
@@ -164,7 +162,7 @@ func applyMemoryTargetEnv(cmd *cobra.Command, profileName string) error {
 		return nil
 	}
 	explicit := false
-	for _, name := range []string{"server", "server-token-file", "pg"} {
+	for _, name := range []string{"server", "server-token-file"} {
 		if cmd.Flags().Changed(name) {
 			explicit = true
 			break
@@ -174,7 +172,6 @@ func applyMemoryTargetEnv(cmd *cobra.Command, profileName string) error {
 		for _, item := range []struct{ flag, env string }{
 			{"server", "AGENTSVIEW_MEMORY_SERVER"},
 			{"server-token-file", "AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE"},
-			{"pg", "AGENTSVIEW_MEMORY_PG"},
 		} {
 			if value := strings.TrimSpace(os.Getenv(item.env)); value != "" {
 				if err := cmd.Flags().Set(item.flag, value); err != nil {
@@ -208,11 +205,6 @@ func resolveMCPService(
 ) (service.SessionService, func(), error) {
 	remote, _ := cmd.Flags().GetString("server")
 	if remote != "" {
-		if pgReadRequested(cmd) {
-			return nil, nil, errors.New(
-				"--server and --pg are mutually exclusive",
-			)
-		}
 		token, err := explicitServerToken(cmd)
 		if err != nil {
 			return nil, nil, err
@@ -230,13 +222,7 @@ func resolveMCPService(
 	if err != nil {
 		return nil, nil, fmt.Errorf("loading config: %w", err)
 	}
-	pgCfg, usePG, err := resolvePGReadConfig(cmd, cfg)
-	if err != nil {
-		return nil, nil, err
-	}
-	if usePG {
-		return newPGReadService(cfg, pgCfg)
-	}
+
 	return newMCPDaemonService(cfg), func() {}, nil
 }
 

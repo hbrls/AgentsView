@@ -20,7 +20,6 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/postgres"
 	"go.kenn.io/agentsview/internal/service"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
@@ -120,9 +119,7 @@ func newSyncRouteFixture(
 	for agent, dirs := range cfg.extraAgentDirs {
 		serverConfig.AgentDirs[agent] = append([]string(nil), dirs...)
 	}
-	serverOptions := []Option{
-		WithReplicas(postgres.Backend{}),
-	}
+	serverOptions := []Option{}
 	if cfg.broadcaster != nil {
 		serverOptions = append(serverOptions, WithBroadcaster(cfg.broadcaster))
 	}

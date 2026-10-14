@@ -31,9 +31,6 @@ func newSessionExportCommand() *cobra.Command {
 			); err != nil {
 				return err
 			}
-			if pgReadRequested(cmd) {
-				return errors.New("session export: local-only command; --pg not supported")
-			}
 			cfg, err := config.LoadPFlags(cmd.Flags())
 			if err != nil {
 				return fmt.Errorf("loading config: %w", err)

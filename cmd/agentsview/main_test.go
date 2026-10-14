@@ -30,7 +30,6 @@ import (
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/server"
-	"go.kenn.io/agentsview/internal/storage"
 	agentsync "go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
@@ -204,12 +203,6 @@ func TestServeStaleArchiveHelperProcess(t *testing.T) {
 		parser.AgentClaude: {os.Getenv("AGENTSVIEW_STALE_SERVE_SOURCES")},
 	}
 	runServe(t.Context(), cfg, serveOptions{SkipInitialSync: true}, 0)
-}
-
-func TestPGServeRuntimeRecordWriteFailureWarnsVisible(t *testing.T) {
-	out, err := runPGRuntimeWarningHelper(t)
-	require.NoError(t, err, string(out))
-	assert.Contains(t, string(out), "could not write daemon runtime record")
 }
 
 func runServeRuntimeWarningHelper(
@@ -387,58 +380,6 @@ func TestRunServeRuntimeWarningHelperProcess(t *testing.T) {
 	runServe(t.Context(), cfg, serveOptions{}, 0)
 }
 
-func runPGRuntimeWarningHelper(t *testing.T) ([]byte, error) {
-	t.Helper()
-	dataDir := t.TempDir()
-	return runRuntimeWarningHelperProcess(
-		t, "PostgreSQL", "TestRunPGRuntimeWarningHelperProcess",
-		[]string{
-			"AGENTSVIEW_RUN_PG_RUNTIME_WARNING_HELPER=1",
-			"AGENTSVIEW_DATA_DIR=" + dataDir,
-		},
-		"could not write daemon runtime record",
-	)
-}
-
-func TestRunPGRuntimeWarningHelperProcess(t *testing.T) {
-	if os.Getenv("AGENTSVIEW_RUN_PG_RUNTIME_WARNING_HELPER") != "1" {
-		return
-	}
-	writeDaemonRuntimeWithAuth = func(
-		string, string, int, string, string, bool, bool, ...int,
-	) (string, error) {
-		return "", errors.New("forced runtime-record write failure")
-	}
-	database := dbtest.OpenTestDBAt(
-		t, filepath.Join(os.Getenv("AGENTSVIEW_DATA_DIR"), "pg.db"),
-	)
-	ctx, cancel := context.WithCancel(t.Context())
-	port, err := server.FindAvailablePort(ctx, "127.0.0.1", 0)
-	require.NoError(t, err)
-	appCfg := config.Config{
-		Host:    "127.0.0.1",
-		Port:    port,
-		DataDir: os.Getenv("AGENTSVIEW_DATA_DIR"),
-	}
-	prepareReplicaServe = func(storage.Replica, config.Config, string) (replicaServeStartup, error) {
-		return replicaServeStartup{
-			cfg: appCfg, ctx: ctx,
-			rtOpts: serveRuntimeOptions{
-				Mode: "pg-serve", RequestedPort: appCfg.Port,
-			},
-			srv: server.New(
-				appCfg, database, nil,
-				server.WithBaseContext(ctx),
-			),
-			cleanup: func() { cancel(); _ = database.Close() },
-		}, nil
-	}
-	// This is only an orphan guard if the parent dies; normal completion is
-	// driven by the parent observing the warning on stdout.
-	time.AfterFunc(2*time.Minute, func() { os.Exit(0) })
-	runReplicaServe(pgReplica{}, appCfg, "")
-}
-
 func TestMustLoadConfig(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -519,9 +460,11 @@ func TestPrepareServeRuntimeConfigPortZeroUsesAssignedPort(t *testing.T) {
 		"missing ephemeral port message")
 	wantURL := fmt.Sprintf("http://viewer.example:%d", cfg.Port)
 	assert.Equal(t, wantURL, cfg.PublicURL)
-	require.True(t, writeReplicaServeRuntimeRecord("pg", &serveRuntime{
-		Cfg: cfg, PublicURL: browserURL(cfg),
-	}))
+	_, err = writeDaemonRuntimeWithAuthAndNoSync(
+		cfg.DataDir, cfg.Host, cfg.Port, version, browserURL(cfg), false,
+		cfg.RequireAuth, cfg.NoSync, nil, 0,
+	)
+	require.NoError(t, err)
 	recordPath, err := runtimeStore(cfg.DataDir).Path(os.Getpid())
 	require.NoError(t, err)
 	rt := daemonRuntimeFromRecord(readRuntimeRecord(t, recordPath))

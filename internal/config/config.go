@@ -17,13 +17,11 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"regexp"
 	"runtime"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -64,51 +62,6 @@ type ProxyConfig struct {
 	TLSKey  string `json:"tls_key,omitempty" toml:"tls_key"`
 	// AllowedSubnets restrict inbound clients to these CIDRs.
 	AllowedSubnets []string `json:"allowed_subnets,omitempty" toml:"allowed_subnets"`
-}
-
-// PGConfig holds PostgreSQL connection settings.
-type PGConfig struct {
-	URL             string   `toml:"url" json:"url"`
-	Schema          string   `toml:"schema" json:"schema"`
-	MachineName     string   `toml:"machine_name" json:"machine_name"`
-	AllowInsecure   bool     `toml:"allow_insecure" json:"allow_insecure"`
-	Projects        []string `toml:"projects" json:"projects,omitempty"`
-	ExcludeProjects []string `toml:"exclude_projects" json:"exclude_projects,omitempty"`
-	// PushVectors gates the vector phase of pg push. A pointer so an
-	// absent key defaults to enabled without a load-time default pass.
-	PushVectors *bool `toml:"push_vectors" json:"push_vectors,omitempty"`
-}
-
-// PushVectorsEnabled reports whether pg push should run its vector phase
-// for this target; unset means enabled.
-func (p PGConfig) PushVectorsEnabled() bool {
-	return p.PushVectors == nil || *p.PushVectors
-}
-
-type pgEnvOverrides struct {
-	URL         string
-	Schema      string
-	MachineName string
-}
-
-// ResolvedPGTarget is one PostgreSQL target after target selection,
-// defaulting, and default-target env overrides are applied.
-type ResolvedPGTarget struct {
-	Name      string
-	Config    PGConfig
-	IsDefault bool
-}
-
-var pgConfigKeys = map[string]struct{}{
-	"raw_tenant": {}, "raw_derivation": {}, "raw_poll_seconds": {}, "raw_attempt_seconds": {}, "raw_max_attempts": {},
-
-	"url":              {},
-	"schema":           {},
-	"machine_name":     {},
-	"allow_insecure":   {},
-	"projects":         {},
-	"exclude_projects": {},
-	"push_vectors":     {},
 }
 
 // VectorConfig holds settings for the optional local semantic-search
@@ -785,9 +738,6 @@ type Config struct {
 	NoSync               bool                   `json:"-" toml:"-"`
 	SkipInitialSync      bool                   `json:"-" toml:"-"`
 	ArchiveContent       ArchiveContent         `json:"archive_content" toml:"archive_content"`
-	PG                   PGConfig               `json:"pg,omitempty" toml:"pg"`
-	DefaultPG            string                 `json:"default_pg,omitempty" toml:"default_pg"`
-	PGTargets            map[string]PGConfig    `json:"-" toml:"-"`
 	Vector               VectorConfig           `json:"vector,omitempty" toml:"vector"`
 	Recall               RecallConfig           `json:"recall,omitempty" toml:"recall"`
 	Insights             InsightsConfig         `json:"insights,omitempty" toml:"insights"`
@@ -864,8 +814,6 @@ type Config struct {
 	HostExplicit bool `json:"-" toml:"-"`
 	// PortExplicit is true when the user passed --port on the CLI.
 	PortExplicit bool `json:"-" toml:"-"`
-
-	pgEnvOverrides pgEnvOverrides
 }
 
 type configJSON Config
@@ -1143,51 +1091,6 @@ func LoadPFlags(fs *pflag.FlagSet) (Config, error) {
 	return cfg, nil
 }
 
-// LoadRemoteServePFlags builds the config for a serve command that reads a
-// replica or mirror instead of the local archive, from a parsed Cobra/pflag
-// FlagSet. It uses isolated serve defaults so the remote serve never picks up
-// the local archive path.
-func LoadRemoteServePFlags(fs *pflag.FlagSet) (Config, error) {
-	cfg, err := loadPGServeBase()
-	if err != nil {
-		return cfg, err
-	}
-	applyPFlags(&cfg, fs)
-	if err := finishLoadedConfig(&cfg); err != nil {
-		return cfg, err
-	}
-	return cfg, nil
-}
-
-func loadPGServeBase() (Config, error) {
-	cfg, err := Default()
-	if err != nil {
-		return cfg, err
-	}
-	cfg.loadEnv()
-	if err := expandDataDir(&cfg); err != nil {
-		return cfg, err
-	}
-	if err := cfg.loadFile(); err != nil {
-		return cfg, fmt.Errorf("loading config file: %w", err)
-	}
-	cfg.DBPath = filepath.Join(cfg.DataDir, "sessions.db")
-
-	// pg serve intentionally ignores persisted normal serve/public/proxy
-	// settings so an existing SQLite-backed serve deployment cannot silently
-	// reconfigure the PG-backed server. Until a dedicated pg-serve config
-	// namespace exists, only explicit pg-serve flags should shape its
-	// network/proxy behavior.
-	cfg.Host = "127.0.0.1"
-	cfg.Port = 8080
-	cfg.PublicURL = ""
-	cfg.PublicOrigins = nil
-	cfg.Proxy = ProxyConfig{}
-	cfg.NoBrowser = false
-	cfg.HostExplicit = false
-	return cfg, nil
-}
-
 // LoadMinimal builds a Config from defaults, env, and config file,
 // without parsing CLI flags. Use this for subcommands that manage
 // their own flag sets.
@@ -1451,8 +1354,6 @@ func (c *Config) applyConfigTOML(data string) error {
 		RemoteAccess                   bool                   `toml:"remote_access"`
 		DisableUpdateCheck             bool                   `toml:"disable_update_check"`
 		ArchiveContent                 string                 `toml:"archive_content"`
-		DefaultPG                      string                 `toml:"default_pg"`
-		PG                             PGConfig               `toml:"pg"`
 		Vector                         VectorConfig           `toml:"vector"`
 		Recall                         RecallConfig           `toml:"recall"`
 		Insights                       InsightsConfig         `toml:"insights"`
@@ -1574,40 +1475,6 @@ func (c *Config) applyConfigTOML(data string) error {
 			return err
 		}
 		c.ArchiveContent = policy
-	}
-	if meta.IsDefined("default_pg") {
-		c.DefaultPG = normalizePGTargetName(file.DefaultPG)
-	}
-	legacyPG, namedPG, err := parsePGConfigSection(raw["pg"])
-	if err != nil {
-		return fmt.Errorf("pg: %w", err)
-	}
-	if len(namedPG) > 0 {
-		c.PG = PGConfig{}
-		c.PGTargets = namedPG
-	} else {
-		c.PGTargets = nil
-		if legacyPG.URL != "" {
-			c.PG.URL = legacyPG.URL
-		}
-		if legacyPG.Schema != "" {
-			c.PG.Schema = legacyPG.Schema
-		}
-		if legacyPG.MachineName != "" {
-			c.PG.MachineName = legacyPG.MachineName
-		}
-		if legacyPG.AllowInsecure {
-			c.PG.AllowInsecure = true
-		}
-		if legacyPG.Projects != nil {
-			c.PG.Projects = legacyPG.Projects
-		}
-		if legacyPG.ExcludeProjects != nil {
-			c.PG.ExcludeProjects = legacyPG.ExcludeProjects
-		}
-		if legacyPG.PushVectors != nil {
-			c.PG.PushVectors = legacyPG.PushVectors
-		}
 	}
 	if file.Vector.Enabled {
 		c.Vector.Enabled = true
@@ -1871,15 +1738,7 @@ func (c *Config) loadEnv() {
 	if v := os.Getenv("AGENTSVIEW_AUTH_TOKEN"); v != "" {
 		c.AuthToken = v
 	}
-	if v := os.Getenv("AGENTSVIEW_PG_URL"); v != "" {
-		c.pgEnvOverrides.URL = v
-	}
-	if v := os.Getenv("AGENTSVIEW_PG_SCHEMA"); v != "" {
-		c.pgEnvOverrides.Schema = v
-	}
-	if v := os.Getenv("AGENTSVIEW_PG_MACHINE"); v != "" {
-		c.pgEnvOverrides.MachineName = v
-	}
+
 	if v := firstEnv(
 		"AGENTSVIEW_CURSOR_ADMIN_API_KEY",
 		"CURSOR_ADMIN_API_KEY",
@@ -2141,10 +2000,6 @@ func applyFlagValue(cfg *Config, name, value string) {
 		if d, err := time.ParseDuration(value); err == nil {
 			cfg.WriteTimeout = d
 		}
-	case "pg":
-		// Read-routing only. The CLI resolver combines this flag
-		// with cfg.PG from env/config and does not persist a new
-		// config field for it.
 	}
 }
 
@@ -2683,20 +2538,6 @@ func hostLiteral(host string) string {
 	return host
 }
 
-func normalizePGTargetName(name string) string {
-	return normalizeTargetName(name)
-}
-
-func isReservedPGTargetName(name string) bool {
-	return isReservedMirrorTargetName(name)
-}
-
-func parsePGConfigSection(value any) (PGConfig, map[string]PGConfig, error) {
-	return parseNamedTargetSection[PGConfig](
-		"pg", "PG", value, pgConfigKeys, isReservedPGTargetName,
-	)
-}
-
 // ResolveDataDir returns the effective data directory by applying
 // defaults and environment overrides, without reading any files.
 // Use this to determine where migration should target before
@@ -2761,226 +2602,6 @@ func IsDefaultAgentsviewDBPath(dbPath string) bool {
 
 func defaultAgentsviewDBDir(dbPath string) bool {
 	return filepath.Base(filepath.Dir(filepath.Clean(dbPath))) == ".agentsview"
-}
-
-// DefaultPGTargetName returns the effective named PG target for this config.
-func (c *Config) DefaultPGTargetName() (string, error) {
-	return defaultNamedTargetName("pg", "default_pg", c.DefaultPG, c.PGTargets)
-}
-
-func (c *Config) validatePGTargets() error {
-	_, err := c.DefaultPGTargetName()
-	return err
-}
-
-func (c *Config) PGTargetNames() ([]string, string, error) {
-	return namedTargetNames("pg", "default_pg", c.DefaultPG, c.PGTargets)
-}
-
-// RawPGTarget returns the configured PG target before env expansion and
-// default-field synthesis. An empty name selects the effective default target.
-func (c *Config) RawPGTarget(name string) (PGConfig, error) {
-	if err := c.validatePGTargets(); err != nil {
-		return PGConfig{}, err
-	}
-	targetName := normalizePGTargetName(name)
-	if len(c.PGTargets) == 0 {
-		if targetName != "" {
-			return PGConfig{}, fmt.Errorf(
-				"pg target %q is not configured; config uses a single legacy [pg] block",
-				name,
-			)
-		}
-		return c.PG, nil
-	}
-	if targetName == "" {
-		var err error
-		targetName, err = c.DefaultPGTargetName()
-		if err != nil {
-			return PGConfig{}, err
-		}
-	}
-	targetCfg, ok := c.PGTargets[targetName]
-	if !ok {
-		return PGConfig{}, fmt.Errorf(
-			"pg target %q is not configured",
-			targetName,
-		)
-	}
-	return targetCfg, nil
-}
-
-func (c *Config) resolvePGConfig(
-	pg PGConfig, applyDefaultEnv bool,
-) (PGConfig, error) {
-	if applyDefaultEnv {
-		if c.pgEnvOverrides.URL != "" {
-			pg.URL = c.pgEnvOverrides.URL
-		}
-		if c.pgEnvOverrides.Schema != "" {
-			pg.Schema = c.pgEnvOverrides.Schema
-		}
-		if c.pgEnvOverrides.MachineName != "" {
-			pg.MachineName = c.pgEnvOverrides.MachineName
-		}
-	}
-	if pg.URL != "" {
-		expanded, err := expandBracedEnv(pg.URL)
-		if err != nil {
-			return pg, fmt.Errorf("expanding url: %w", err)
-		}
-		pg.URL = expanded
-	}
-	if pg.Schema == "" {
-		pg.Schema = "agentsview"
-	}
-	if pg.MachineName == "" {
-		pg.MachineName = c.InstallationID
-	}
-	return pg, nil
-}
-
-// ResolvePG returns the effective default PG target with defaults applied
-// and environment variables expanded in URL.
-func (c *Config) ResolvePG() (PGConfig, error) {
-	return c.ResolvePGTarget("")
-}
-
-// ResolvePGTarget resolves one named PG target, or the effective default
-// target when name is empty. In legacy single-target mode, only the empty
-// name is valid.
-func (c *Config) ResolvePGTarget(name string) (PGConfig, error) {
-	if err := c.validatePGTargets(); err != nil {
-		return PGConfig{}, err
-	}
-	targetName := normalizePGTargetName(name)
-	if len(c.PGTargets) == 0 {
-		if targetName != "" {
-			return PGConfig{}, fmt.Errorf(
-				"pg target %q is not configured; config uses a single legacy [pg] block",
-				name,
-			)
-		}
-		return c.resolvePGConfig(c.PG, true)
-	}
-	defaultName, err := c.DefaultPGTargetName()
-	if err != nil {
-		return PGConfig{}, err
-	}
-	if targetName == "" {
-		targetName = defaultName
-	}
-	targetCfg, ok := c.PGTargets[targetName]
-	if !ok {
-		return PGConfig{}, fmt.Errorf(
-			"pg target %q is not configured",
-			targetName,
-		)
-	}
-	return c.resolvePGConfig(targetCfg, targetName == defaultName)
-}
-
-// ResolvePGTargets resolves every configured PG target. Legacy single-target
-// mode returns one unnamed default target.
-func (c *Config) ResolvePGTargets() ([]ResolvedPGTarget, error) {
-	if err := c.validatePGTargets(); err != nil {
-		return nil, err
-	}
-	if len(c.PGTargets) == 0 {
-		pg, err := c.resolvePGConfig(c.PG, true)
-		if err != nil {
-			return nil, err
-		}
-		return []ResolvedPGTarget{{
-			Config:    pg,
-			IsDefault: true,
-		}}, nil
-	}
-	names, defaultName, err := c.PGTargetNames()
-	if err != nil {
-		return nil, err
-	}
-	targets := make([]ResolvedPGTarget, 0, len(names))
-	for _, name := range names {
-		targetCfg, err := c.resolvePGConfig(
-			c.PGTargets[name], name == defaultName,
-		)
-		if err != nil {
-			return nil, err
-		}
-		targets = append(targets, ResolvedPGTarget{
-			Name:      name,
-			Config:    targetCfg,
-			IsDefault: name == defaultName,
-		})
-	}
-	return targets, nil
-}
-
-var (
-	bracedEnvPattern      = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
-	bareEnvPattern        = regexp.MustCompile(`^\$([A-Za-z_][A-Za-z0-9_]*)$`)
-	partialBareEnvPattern = regexp.MustCompile(`\$([A-Za-z_][A-Za-z0-9_]*)`)
-)
-
-// IsEnvDependentURL reports whether s would have environment variables
-// expanded by expandBracedEnv: it contains any ${VAR} reference, or the
-// whole string is a single bare $VAR shortcut. Embedded bare $VAR
-// references (e.g. "postgres://$USER@host") are deliberately NOT expanded
-// and so do not count. Callers that must persist a literal URL into a
-// context without the shell environment (e.g. a background service) use
-// this to reject env-dependent values. It shares the exact patterns
-// expandBracedEnv uses so the rejection check cannot drift from the
-// expansion semantics.
-func IsEnvDependentURL(s string) bool {
-	return bracedEnvPattern.MatchString(s) ||
-		bareEnvPattern.MatchString(strings.TrimSpace(s))
-}
-
-// bareEnvWarned tracks which bare $VAR names have already been warned
-// about, so each distinct variable triggers a warning at most once.
-var bareEnvWarned sync.Map
-
-// expandBracedEnv expands ${VAR} references in s. As a convenience,
-// if the entire string is a single bare $VAR (e.g. "$PGURL"), it is
-// expanded as a whole-string shortcut. Bare $VAR references embedded
-// in a larger string (e.g. "postgres://$USER@host") are NOT expanded;
-// use ${VAR} syntax instead.
-func expandBracedEnv(s string) (string, error) {
-	if parts := bareEnvPattern.FindStringSubmatch(s); parts != nil {
-		val, ok := os.LookupEnv(parts[1])
-		if !ok {
-			return "", fmt.Errorf("environment variable %s is not set", parts[1])
-		}
-		return val, nil
-	}
-
-	// Warn about bare $VAR references that won't be expanded.
-	if remaining := bracedEnvPattern.ReplaceAllString(s, ""); partialBareEnvPattern.MatchString(remaining) {
-		for _, m := range partialBareEnvPattern.FindAllStringSubmatch(remaining, -1) {
-			if _, set := os.LookupEnv(m[1]); set {
-				if _, warned := bareEnvWarned.LoadOrStore(m[1], true); !warned {
-					log.Printf("warning: pg.url contains bare $%s which will NOT be expanded; use ${%s} syntax instead", m[1], m[1])
-				}
-			}
-		}
-	}
-
-	var missingVars []string
-	result := bracedEnvPattern.ReplaceAllStringFunc(s, func(match string) string {
-		name := bracedEnvPattern.FindStringSubmatch(match)[1]
-		val, ok := os.LookupEnv(name)
-		if !ok {
-			missingVars = append(missingVars, name)
-			return ""
-		}
-		return val
-	})
-	if len(missingVars) > 0 {
-		return "", fmt.Errorf("environment variable(s) not set: %s",
-			strings.Join(missingVars, ", "))
-	}
-	return result, nil
 }
 
 // SaveTerminalConfig persists terminal settings to the config file.

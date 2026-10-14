@@ -674,24 +674,6 @@ func (ix *Index) GenerationByID(ctx context.Context, id int64) (GenerationInfo, 
 	return info, nil
 }
 
-// MissingEmbeddedDocs returns how many current mirror docs the generation
-// with fingerprint cannot export yet. A nil sessionIDs slice counts the whole
-// mirror; a non-nil slice limits the count to those sessions, which lets
-// change-scoped replica pushes bound the readiness read to their candidates.
-func (ix *Index) MissingEmbeddedDocs(
-	ctx context.Context, fingerprint string, sessionIDs []string,
-) (int64, error) {
-	if ix.versionMismatch {
-		return 0, ErrMirrorVersionMismatch
-	}
-	snap, err := ix.store.Snapshot(ctx, fingerprint)
-	if err != nil {
-		return 0, err
-	}
-	defer func() { _ = snap.Close() }()
-	return missingEmbeddedDocs(ctx, snap, sessionIDs)
-}
-
 // genInfoScanner is the subset of *sql.Row / *sql.Rows Scan needs, letting
 // scanGenerationRow serve both Generations (rows) and GenerationByID (row).
 type genInfoScanner interface {

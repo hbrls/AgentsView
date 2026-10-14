@@ -372,7 +372,6 @@ func TestResolveCodebuffBareID_ServerBareReturnsError(t *testing.T) {
 	cmd := &cobra.Command{Use: "test"}
 	cmd.Flags().String("server", "", "")
 	cmd.Flags().String("machine", "local", "")
-	cmd.Flags().Bool("pg", false, "")
 	require.NoError(t, cmd.Flags().Set("server", "http://remote.example"))
 	// svc.Get would panic because Get panics in stubGetService when
 	// the path is wrong. We must never reach it. The bare input is
@@ -401,32 +400,6 @@ func TestResolveCodebuffBareID_ServerBareReturnsError(t *testing.T) {
 		"--server must not probe svc.Get for bare timestamps")
 }
 
-// TestResolveCodebuffBareID_PGBareReturnsError mirrors the previous
-// test for the --pg path, which was the second roborev-flagged code
-// path. Symmetric coverage guards against future divergence.
-func TestResolveCodebuffBareID_PGBareReturnsError(t *testing.T) {
-	t.Parallel()
-	cmd := &cobra.Command{Use: "test"}
-	cmd.Flags().String("server", "", "")
-	cmd.Flags().String("machine", "local", "")
-	cmd.Flags().Bool("pg", false, "")
-	require.NoError(t, cmd.Flags().Set("pg", "true"))
-	// Same ISO-8601 shape as the --server variant — see comment
-	// on TestResolveCodebuffBareID_ServerBareReturnsError.
-	svc := &stubGetService{}
-	got, err := resolveCodebuffBareID(
-		cmd, svc, "2026-07-16T00-09-00.236Z",
-	)
-	require.Error(t, err)
-	assert.Empty(t, got)
-	assert.Contains(t, err.Error(), "session list")
-	assert.Contains(t, err.Error(), "codebuff:<project>:<ts>")
-	assert.Contains(t, err.Error(), "freebuff:<project>:<ts>")
-	assert.Contains(t, err.Error(), "host~codebuff:<project>:<ts>")
-	assert.Contains(t, err.Error(), "host~freebuff:<project>:<ts>")
-	assert.Empty(t, svc.getCalls)
-}
-
 // TestResolveCodebuffBareID_ServerBareUUIDForOtherAgent pins the
 // regression fix: a non-canonical but non-Codebuff input (e.g. a
 // bare Codex / Copilot / Gemini UUID) must NOT trigger the
@@ -440,7 +413,6 @@ func TestResolveCodebuffBareID_ServerBareUUIDForOtherAgent(t *testing.T) {
 	cmd := &cobra.Command{Use: "test"}
 	cmd.Flags().String("server", "", "")
 	cmd.Flags().String("machine", "local", "")
-	cmd.Flags().Bool("pg", false, "")
 	require.NoError(t, cmd.Flags().Set("server", "http://remote.example"))
 	svc := &stubGetService{}
 	// 36-char hex with dashes — the shape of a real Codex /
@@ -462,25 +434,6 @@ func TestResolveCodebuffBareID_ServerBareUUIDForOtherAgent(t *testing.T) {
 		"the early-exit path must not probe svc.Get")
 }
 
-// TestResolveCodebuffBareID_PGBareUUIDForOtherAgent mirrors the
-// previous test for the --pg transport. Symmetric coverage guards
-// against future divergence between --server and --pg paths.
-func TestResolveCodebuffBareID_PGBareUUIDForOtherAgent(t *testing.T) {
-	t.Parallel()
-	cmd := &cobra.Command{Use: "test"}
-	cmd.Flags().String("server", "", "")
-	cmd.Flags().String("machine", "local", "")
-	cmd.Flags().Bool("pg", false, "")
-	require.NoError(t, cmd.Flags().Set("pg", "true"))
-	svc := &stubGetService{}
-	got, err := resolveCodebuffBareID(
-		cmd, svc, "abcdef01-2345-6789-abcd-ef0123456789",
-	)
-	require.NoError(t, err)
-	assert.Empty(t, got)
-	assert.Empty(t, svc.getCalls)
-}
-
 // TestResolveCodebuffBareID_CanonicalSkipsBare pins pass-through
 // behaviour: canonical IDs must skip the resolver regardless of
 // transport, because lookupSessionWithPrefixes handles them via the
@@ -491,8 +444,7 @@ func TestResolveCodebuffBareID_CanonicalSkipsBare(t *testing.T) {
 	cmd := &cobra.Command{Use: "test"}
 	cmd.Flags().String("server", "", "")
 	cmd.Flags().String("machine", "local", "")
-	cmd.Flags().Bool("pg", false, "")
-	require.NoError(t, cmd.Flags().Set("pg", "true"))
+	require.NoError(t, cmd.Flags().Set("server", "http://example.test"))
 
 	cases := []string{
 		"codebuff:proj:1704067200",      // codebuff canonical

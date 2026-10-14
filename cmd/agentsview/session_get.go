@@ -350,7 +350,7 @@ func resolveCodebuffBareID(
 		return "", nil
 	}
 	remote, _ := cmd.Flags().GetString("server")
-	if remote != "" || pgReadRequested(cmd) {
+	if remote != "" {
 		return "", errBareCodebuffRemoteUnsupported(id)
 	}
 	cfg := mustLoadConfig(cmd)
@@ -379,7 +379,7 @@ func resolveCodebuffBareID(
 func errBareCodebuffRemoteUnsupported(id string) error {
 	return fmt.Errorf(
 		"%q is not a canonical session ID and cannot be resolved "+
-			"against a remote store (--server or --pg). "+
+			"against a remote store (--server). "+
 			"Run `agentsview session list` to find the canonical ID, "+
 			"then pass one of:\n"+
 			"  codebuff:<project>:<ts>          # local session\n"+

@@ -29,7 +29,6 @@ import (
 	"go.kenn.io/agentsview/internal/pricingrefresh"
 	"go.kenn.io/agentsview/internal/recall/extract"
 	"go.kenn.io/agentsview/internal/service"
-	"go.kenn.io/agentsview/internal/storage"
 	"go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/web"
 	"go.kenn.io/kit/daemon"
@@ -52,9 +51,6 @@ type VersionInfo struct {
 // CLI or daemon.
 const (
 	APIVersion = 10
-	// ScopedWatchPushAPIVersion is the first daemon API that accepts bounded
-	// watcher batches and their authoritative recovery scope on push requests.
-	ScopedWatchPushAPIVersion = 7
 	// SubagentUsageAPIVersion is the first daemon API that guarantees
 	// combined session-usage scope and targeted descendant synchronization.
 	SubagentUsageAPIVersion = 6
@@ -160,15 +156,6 @@ type Server struct {
 	// [vector].include_automated scope, applied to HTTP build requests
 	// that leave include_automated unset.
 	embeddingsIncludeAutomatedDefault bool
-
-	// vectorPushSource, when set, supplies the local vectors.db active
-	// generation to the daemon's pg push handler. Nil leaves the vector
-	// push phase skipped, e.g. when [vector] is disabled.
-	vectorPushSource storage.VectorPushSource
-
-	// replicas and mirror are the push backends registered by the
-	// composition root; each gets a daemon push route.
-	replicas []storage.Replica
 
 	// localSyncRunner, when set, backs the foreground local-sync HTTP handler
 	// with the worker-backed pass instead of running SyncThenRun in process.

@@ -483,11 +483,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	if rtOpts.BasePath != "" {
 		srvOpts = append(srvOpts, server.WithBasePath(rtOpts.BasePath))
 	}
-	srvOpts = append(srvOpts, pushBackendOptions()...)
 	srvOpts = append(srvOpts, vectorServe.ServerOpts...)
-	if src := newVectorPushSource(cfg); src != nil {
-		srvOpts = append(srvOpts, server.WithVectorPushSource(src))
-	}
 	if extractSched != nil {
 		// Trash, restore, and permanent-delete routes change extraction
 		// eligibility; the retraction pass must hear about them even when
@@ -1484,16 +1480,14 @@ func daemonRestartUpgradeHint() string {
 
 // staleClientUpgradeHint is the counterpart of daemonRestartUpgradeHint for
 // the direction where the daemon has already been upgraded and the process
-// running this command is the one left behind, typically a `pg push
-// --watch` or `duckdb push --watch` started before the upgrade.
+// running this command is the one left behind, such as an MCP process.
 func staleClientUpgradeHint() string {
 	return "The running daemon is newer than this agentsview binary, so " +
 		"this command cannot use it until both run the same version. " +
 		"Restarting the daemon will not help. Upgrade this agentsview " +
 		"install and rerun the command. If this command is a " +
 		"long-running background process started before the upgrade " +
-		"(`pg push --watch`, `duckdb push --watch`, or a service " +
-		"installed with `agentsview pg service`), restart it so it " +
+		"(such as `mcp`), restart it so it " +
 		"picks up the current binary."
 }
 

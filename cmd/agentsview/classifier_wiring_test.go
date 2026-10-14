@@ -23,26 +23,11 @@ import (
 // contain an EARLIER call to applyClassifierConfig in the
 // same enclosing body.
 var triggerCalls = map[string]struct{}{
-	"db.Open":               {},
-	"db.OpenReadOnly":       {},
-	"postgres.Open":         {},
-	"postgres.NewStore":     {},
-	"postgres.New":          {},
-	"postgres.EnsureSchema": {},
-	// Replica backends open their stores through the storage.Replica
-	// contract. The CLI always holds the backend in a variable named
-	// backend, which is what this selector match keys on.
-	"backend.NewPusher":      {},
-	"backend.OpenStore":      {},
-	"backend.OpenServeStore": {},
+	"db.Open":         {},
+	"db.OpenReadOnly": {},
 }
 
 const wiringHelper = "applyClassifierConfig"
-
-var inheritedWiringFuncs = map[string]struct{}{
-	"runReplicaPushTarget":   {},
-	"runReplicaStatusTarget": {},
-}
 
 // TestEveryStoreOpenPathIsWired enforces the rule documented
 // in the design spec: every code path in cmd/agentsview that
@@ -88,9 +73,6 @@ func scanFile(
 		switch fn := n.(type) {
 		case *ast.FuncDecl:
 			if fn.Body == nil {
-				return true
-			}
-			if _, ok := inheritedWiringFuncs[fn.Name.Name]; ok {
 				return true
 			}
 			if v := checkBody(
