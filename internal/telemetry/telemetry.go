@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -34,6 +35,13 @@ const (
 )
 
 var ErrUnsupportedEvent = kittelemetry.ErrUnsupportedEvent
+
+func init() {
+	// Default to off; kit still honors explicit environment settings.
+	if strings.TrimSpace(os.Getenv(EnabledEnv)) == "" {
+		_ = os.Setenv(EnabledEnv, "0") // The constant key and value are valid.
+	}
+}
 
 type Reporter struct {
 	client *kittelemetry.Reporter
