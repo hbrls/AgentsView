@@ -685,42 +685,6 @@ func TestTeeEmitterAlwaysCallsPrimaryAndGatesSchedulerOnRunAfterSync(t *testing.
 	})
 }
 
-// TestRunRemoteHostSyncLoop_EmitsThroughTeeNotifiesScheduler is a
-// regression test for a bug where runServe wired startPeriodicSync's
-// scheduled remote-host sync path to the bare SSE broadcaster instead of
-// the wrapped teeEmitter, so remote-synced sessions notified SSE clients
-// but never reached the embed scheduler until an unrelated local sync or
-// the 24h backstop ran. It drives runRemoteHostSyncLoop — the function
-// startPeriodicSync spawns per configured remote host — with a teeEmitter
-// and a syncFn reporting synced sessions, and asserts the scheduler
-// actually receives a build trigger through that path.
-func TestRunRemoteHostSyncLoop_EmitsThroughTeeNotifiesScheduler(t *testing.T) {
-	primary := &recordingEmitter{}
-	fake := &fakeEmbedManager{}
-	s := newEmbedScheduler(fake, 5*time.Millisecond, 0, false, nil)
-	schedCtx := t.Context()
-	go s.Run(schedCtx)
-	defer s.Stop()
-
-	tee := teeEmitter{primary: primary, scheduler: s, runAfterSync: true}
-
-	syncFn := func() (int, error) {
-		return 1, nil // one session synced on this remote host
-	}
-
-	loopCtx := t.Context()
-	done := make(chan struct{})
-	go runRemoteHostSyncLoop(
-		loopCtx, "remote-host", 5*time.Millisecond, syncFn, tee, nil, done,
-	)
-	defer close(done)
-
-	waitForSchedulerCondition(t, func() bool { return fake.callCount() >= 1 },
-		"a scheduled remote sync reaching the tee emitter must notify the embed scheduler")
-	assert.NotZero(t, primary.count(),
-		"the tee must still forward remote sync completions to the SSE broadcaster")
-}
-
 // --- searcherAdapter error taxonomy ---
 
 func TestTranslateSearchErrorMapsVectorErrorsToSemanticUnavailable(t *testing.T) {

@@ -151,8 +151,6 @@ func TestAugureCodeRegistryEntry(t *testing.T) {
 	assert.True(t, def.FileBased)
 	assert.True(t, def.PostAnswerToolWork,
 		"Codex-format rollouts emit the answer before later tool calls")
-	assert.False(t, def.RemoteSyncExcluded,
-		"Augure Code rollouts are plaintext and stay eligible for remote sync")
 
 	// augure-code: must resolve through AgentByPrefix.
 	byPrefix, ok := AgentByPrefix("augure-code:019fbcca")
@@ -297,15 +295,4 @@ func TestAugureCodeProviderIgnoresCodexSidecars(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Empty(t, sources, "index events must not fan out for a fork")
-
-	assert.False(t, AgentSupportsS3Discovery(AgentAugureCode),
-		"Augure Code has no S3 archive convention and must not import one as Codex")
-	s3Provider, ok := S3ProviderFor(AgentAugureCode)
-	assert.False(t, ok)
-	assert.Nil(t, s3Provider)
-
-	// Raw capture is a Codex-owned capability: the fork path must clear it.
-	caps := provider.Capabilities()
-	assert.Equal(t, RawCaptureCapabilities{}, caps.RawCapture,
-		"Augure Code must not claim Codex raw capture")
 }

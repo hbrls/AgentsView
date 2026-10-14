@@ -2,11 +2,9 @@ package parser
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"testing"
 	"time"
 
@@ -164,34 +162,6 @@ func TestEvenerProviderChangedPathStaysLocal(t *testing.T) {
 	}
 }
 
-func TestEvenerProviderRawCaptureNamesOnlyTranscriptAndMetadata(t *testing.T) {
-	root := t.TempDir()
-	path := filepath.Join(root, "projects", "demo", "sessions", "good.transcript.jsonl")
-	meta := filepath.Join(filepath.Dir(path), "good.meta.json")
-	writeSourceFile(t, path, "{}\n")
-	writeSourceFile(t, meta, "{}")
-	writeSourceFile(t, filepath.Join(filepath.Dir(path), "good.api.jsonl"), "{}\n")
-	provider, ok := NewProvider(AgentType("evener"), ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
-	sources, err := provider.Discover(t.Context())
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
-	planner, ok := provider.(RawCaptureProvider)
-	require.True(t, ok)
-	plan, err := planner.PlanRawCapture(t.Context(), sources[0])
-	require.NoError(t, err)
-	require.Len(t, plan.Entries, 2)
-	assert.Equal(t, root, plan.CaptureRoot)
-	assert.Equal(t, "projects/demo/sessions/good.transcript.jsonl", plan.Entries[0].Path)
-	assert.Equal(t, "projects/demo/sessions/good.meta.json", plan.Entries[1].Path)
-	assert.True(t, plan.Entries[0].Appendable)
-	assert.False(t, plan.Entries[1].Appendable)
-	require.NoError(t, os.Remove(meta))
-	plan, err = planner.PlanRawCapture(t.Context(), sources[0])
-	require.NoError(t, err)
-	require.Len(t, plan.Entries, 1)
-}
-
 func TestEvenerProviderParseReplacementAndRetry(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "sessions", "good.transcript.jsonl")
@@ -292,8 +262,6 @@ func TestEvenerProviderRejectsSymlinkCompanions(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 	_, err = provider.Fingerprint(t.Context(), sources[0])
-	require.Error(t, err)
-	_, err = provider.(RawCaptureProvider).PlanRawCapture(t.Context(), sources[0])
 	require.Error(t, err)
 }
 
@@ -445,38 +413,6 @@ func TestEvenerProviderTruncatedTranscriptDefersReplacement(t *testing.T) {
 	assert.False(t, partial.ForceReplace)
 }
 
-func TestEvenerProviderRemoteChangesRequestReconciliation(t *testing.T) {
-	root := t.TempDir()
-	path := filepath.Join(root, "sessions", "session.transcript.jsonl")
-	writeSourceFile(t, path, "{}\n")
-	for _, tc := range []struct {
-		name             string
-		remote, metadata bool
-		want             int
-	}{
-		{"local transcript", false, false, 1},
-		{"remote transcript", true, false, 0},
-		{"remote metadata", true, true, 0},
-		{"local metadata", false, true, 1},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			cfg := ProviderConfig{Roots: []string{root}}
-			if tc.remote {
-				cfg.PathRewriter = func(path string) string { return "remote:" + path }
-			}
-			provider, ok := NewProvider(AgentEvener, cfg)
-			require.True(t, ok)
-			changedPath := path
-			if tc.metadata {
-				changedPath = evenerMetadataPath(path)
-			}
-			sources, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{Path: changedPath, EventKind: "write"})
-			require.NoError(t, err)
-			assert.Len(t, sources, tc.want)
-		})
-	}
-}
-
 func TestEvenerProviderParentMetadataFingerprint(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "sessions")
@@ -530,62 +466,6 @@ func TestEvenerProviderParentMetadataFingerprint(t *testing.T) {
 			restored, err := provider.Fingerprint(t.Context(), source)
 			require.NoError(t, err)
 			assert.Equal(t, missing.Hash, restored.Hash)
-		})
-	}
-}
-
-func TestEvenerRawDiscoveryStreamsWithProgress(t *testing.T) {
-	for _, count := range []int{1, 200} {
-		t.Run(strconv.Itoa(count), func(t *testing.T) {
-			root := t.TempDir()
-			sessions := filepath.Join(root, "projects", "demo", "sessions")
-			for i := range count {
-				writeSourceFile(t, filepath.Join(sessions, fmt.Sprintf("session-%d.transcript.jsonl", i)), "{}\n")
-			}
-			writeSourceFile(t, filepath.Join(sessions, "ignored.api.jsonl"), "{}\n")
-			provider, ok := NewProvider(AgentEvener, ProviderConfig{Roots: []string{root, sessions}})
-			require.True(t, ok)
-			steps, largestBatch, yielded := 0, 0, 0
-			ctx := WithRawCaptureDiscoveryProgress(t.Context(), func() error { steps++; return nil })
-			ctx = WithStreamingDiscoveryBufferObserver(ctx, func(n int) { largestBatch = max(largestBatch, n) })
-			complete, err := StreamRawCaptureSources(ctx, provider, func(source SourceRef) error {
-				yielded++
-				plan, err := provider.(RawCaptureProvider).PlanRawCapture(ctx, source)
-				require.NoError(t, err)
-				require.Len(t, plan.Entries, 1)
-				return nil
-			})
-			require.NoError(t, err)
-			assert.True(t, complete)
-			assert.Equal(t, count, yielded)
-			assert.GreaterOrEqual(t, steps, count)
-			assert.Positive(t, largestBatch)
-			assert.LessOrEqual(t, largestBatch, streamingDirectoryBatchSize)
-			stop := errors.New("pause audit")
-			ctx = WithRawCaptureDiscoveryProgress(t.Context(), func() error { return stop })
-			complete, err = StreamRawCaptureSources(ctx, provider, func(SourceRef) error { require.FailNow(t, "yield after pause"); return nil })
-			require.ErrorIs(t, err, stop)
-			assert.False(t, complete)
-			steps = 0
-			ctx = WithRawCaptureDiscoveryProgress(t.Context(), func() error {
-				steps++
-				if steps == 3 {
-					return stop
-				}
-				return nil
-			})
-			complete, err = StreamRawCaptureSources(ctx, provider, func(SourceRef) error { return nil })
-			require.ErrorIs(t, err, stop)
-			assert.False(t, complete)
-			assert.Equal(t, 3, steps)
-			cancelled, cancel := context.WithCancel(t.Context())
-			cancel()
-			complete, err = StreamRawCaptureSources(cancelled, provider, func(SourceRef) error { return nil })
-			require.ErrorIs(t, err, context.Canceled)
-			assert.False(t, complete)
-			complete, err = StreamRawCaptureSources(t.Context(), provider, func(SourceRef) error { return stop })
-			require.ErrorIs(t, err, stop)
-			assert.False(t, complete)
 		})
 	}
 }

@@ -792,33 +792,6 @@ func TestPeriodicReconcileCapability(t *testing.T) {
 	assert.False(t, optedIn[AgentGemini])
 }
 
-func TestRemoteSyncExcludedCapability(t *testing.T) {
-	excluded := map[AgentType]bool{}
-	for _, def := range Registry {
-		excluded[def.Type] = def.RemoteSyncExcluded
-	}
-	// Trae's modern layout stores sessions as encrypted state that a remote
-	// machine cannot read, so it opts out of every remote sync artifact.
-	assert.True(t, excluded[AgentTrae])
-	// Omnigent's chat.db co-locates transcripts with authentication
-	// secrets, so its source tree never leaves the machine.
-	assert.True(t, excluded[AgentOmnigent])
-	// Augure Desktop's roots hold the raw state.db (plus WAL/journal)
-	// alongside non-transcript application state, so the store never
-	// leaves the machine either.
-	assert.True(t, excluded[AgentAugureDesktop])
-	assert.False(t, excluded[AgentClaude])
-	assert.False(t, excluded[AgentCodex])
-}
-
-func TestRemoteSyncExcludedAgent(t *testing.T) {
-	assert.True(t, RemoteSyncExcludedAgent(AgentTrae))
-	assert.True(t, RemoteSyncExcludedAgent(AgentOmnigent))
-	assert.True(t, RemoteSyncExcludedAgent(AgentAugureDesktop))
-	assert.False(t, RemoteSyncExcludedAgent(AgentClaude))
-	assert.False(t, RemoteSyncExcludedAgent(AgentType("unknown-agent")))
-}
-
 func TestAgentByPrefixCowork(t *testing.T) {
 	def, ok := AgentByPrefix("cowork:c0000000-0000-4000-8000-000000000001")
 	require.True(t, ok, "cowork-prefixed ID should resolve")

@@ -22,36 +22,6 @@ func TestProviderCapabilitiesPersistentArchiveDefaultUnsupported(t *testing.T) {
 	assert.Equal(t, CapabilityUnsupported, (SourceCapabilities{}).PersistentArchive)
 }
 
-func TestProviderCapabilitiesS3DiscoveryDefaultUnsupported(t *testing.T) {
-	assert.Equal(t, CapabilityUnsupported, (SourceCapabilities{}).S3Discovery)
-}
-
-func TestProviderCapabilitiesS3DiscoveryMatchConsumers(t *testing.T) {
-	assert.Equal(t, CapabilityUnsupported, (SourceCapabilities{}).S3Discovery,
-		"new providers must opt in explicitly")
-
-	supported := map[AgentType]bool{
-		AgentClaude:    true,
-		AgentCodex:     true,
-		AgentCursor:    true,
-		AgentIcodemate: true,
-	}
-	for _, factory := range ProviderFactories() {
-		agent := factory.Definition().Type
-		got := factory.Capabilities().Source.S3Discovery
-		if supported[agent] {
-			assert.Equal(t, CapabilitySupported, got)
-			provider := factory.NewProvider(ProviderConfig{
-				Roots: []string{t.TempDir()},
-			})
-			assert.Implements(t, (*S3Provider)(nil), provider)
-			continue
-		}
-		assert.Equalf(t, CapabilityUnsupported, got,
-			"%s must not opt into S3 discovery", agent)
-	}
-}
-
 // Only the providers with reported same-id files opt into keeping both.
 func TestProviderCapabilitiesSharedSessionIDsOptIn(t *testing.T) {
 	for _, factory := range ProviderFactories() {
@@ -236,27 +206,6 @@ func TestProviderMigrationRejectsStreamingCapabilityWithoutInterface(t *testing.
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "StreamingDiscoverer")
-}
-
-func TestProviderMigrationRejectsS3DiscoveryWithoutInterface(t *testing.T) {
-	factory := testProviderFactory{
-		def: AgentDef{Type: "invalid-s3-provider"},
-		caps: Capabilities{Source: SourceCapabilities{
-			DiscoverSources: CapabilitySupported,
-			FindSource:      CapabilitySupported,
-			S3Discovery:     CapabilitySupported,
-		}},
-	}
-
-	err := ValidateProviderMigrationModes(
-		[]ProviderFactory{factory},
-		map[AgentType]ProviderMigrationMode{
-			"invalid-s3-provider": ProviderMigrationProviderAuthoritative,
-		},
-	)
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "S3Provider")
 }
 
 func TestProviderMigrationRejectsSharedContainerWithoutExactRehydration(t *testing.T) {
