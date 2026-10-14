@@ -997,7 +997,7 @@ func Default() (Config, error) {
 		WatchExcludePatterns:           []string{".git", "node_modules", "__pycache__", ".venv", "venv", "vendor", ".next", "*.lock*"},
 		ResultContentBlockedCategories: []string{"Read", "Glob"},
 		EventsCoalesceInterval:         10 * time.Second,
-		DaemonIdleTimeout:              20 * time.Minute,
+		DaemonIdleTimeout:              5 * time.Minute,
 		Agent:                          map[string]AgentConfig{},
 		Vector: VectorConfig{
 			RecallMaxRevisionLag: DefaultRecallMaxRevisionLag,

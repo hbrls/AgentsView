@@ -1863,7 +1863,7 @@ func TestLoadFile_DaemonIdleTimeout(t *testing.T) {
 		data map[string]any
 		want time.Duration
 	}{
-		{name: "absent uses default", data: map[string]any{}, want: 20 * time.Minute},
+		{name: "absent uses default", data: map[string]any{}, want: 5 * time.Minute},
 		{name: "configured", data: map[string]any{"daemon_idle_timeout": "6h"}, want: 6 * time.Hour},
 		{name: "explicit zero disables", data: map[string]any{"daemon_idle_timeout": "0s"}, want: 0},
 	}

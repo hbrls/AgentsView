@@ -1,13 +1,59 @@
 package telemetry
 
 import (
+	"os"
+	"os/exec"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	kittelemetry "go.kenn.io/kit/telemetry/posthog"
 )
+
+func TestTelemetryStartupDefault(t *testing.T) {
+	// A subprocess exercises init before any test changes the environment.
+	if want := os.Getenv("AGENTSVIEW_TEST_TELEMETRY_ENABLED"); want != "" {
+		assert.Equal(t, want == "true", EnabledFromEnv())
+		if want == "false" {
+			reporter, err := NewReporter(Options{})
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, reporter.Close()) })
+			assert.False(t, reporter.Enabled())
+			assert.True(t, reporter.EventAllowed(EventAppOpened))
+			assert.False(t, reporter.EventAllowed("unknown_event"))
+		}
+		return
+	}
+
+	for _, tc := range []struct {
+		name, enabled, generic, want string
+		unset                        bool
+	}{
+		{name: "unset defaults off", generic: "1", want: "false", unset: true},
+		{name: "empty defaults off", generic: "1", want: "false"},
+		{name: "whitespace defaults off", enabled: " \t ", generic: "1", want: "false"},
+		{name: "explicit opt in", enabled: "1", generic: "1", want: "true"},
+		{name: "explicit opt out", enabled: "0", generic: "1", want: "false"},
+		{name: "generic opt out wins", enabled: "1", generic: "0", want: "false"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestTelemetryStartupDefault$")
+			for _, env := range os.Environ() {
+				if !strings.HasPrefix(env, EnabledEnv+"=") && !strings.HasPrefix(env, GenericEnabledEnv+"=") {
+					cmd.Env = append(cmd.Env, env)
+				}
+			}
+			cmd.Env = append(cmd.Env, GenericEnabledEnv+"="+tc.generic, "AGENTSVIEW_TEST_TELEMETRY_ENABLED="+tc.want)
+			if !tc.unset {
+				cmd.Env = append(cmd.Env, EnabledEnv+"="+tc.enabled)
+			}
+			output, err := cmd.CombinedOutput()
+			require.NoError(t, err, "%s", output)
+		})
+	}
+}
 
 func TestEnabledFromEnvHonorsAgentsViewAndGenericOptOut(t *testing.T) {
 	t.Setenv(EnabledEnv, "0")
