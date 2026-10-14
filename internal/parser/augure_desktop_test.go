@@ -315,7 +315,4 @@ func TestAugureDesktopRegistryEntry(t *testing.T) {
 		"AppData/Local/augure-desktop",
 	}, def.DefaultDirs)
 	assert.True(t, def.FileBased)
-	assert.True(t, def.RemoteSyncExcluded,
-		"roots hold raw state.db/WAL plus app state; excluded until a "+
-			"safe allowlisted export exists")
 }

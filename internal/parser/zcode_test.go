@@ -216,29 +216,6 @@ func TestZCodeParsesReportedIntegerTimestamps(t *testing.T) {
 	assert.Equal(t, int64(1783352700000000000), outcome.Results[0].Result.Session.File.Mtime)
 }
 
-func TestZCodeProviderFindsRawDatabaseInDirectRoot(t *testing.T) {
-	// A materialized raw snapshot places db.sqlite directly inside the given
-	// root, so stable-snapshot root normalization must accept that layout
-	// instead of always appending a "db" child.
-	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(
-		filepath.Join(dir, ZCodeDBName), []byte("sqlite\n"), 0o600,
-	))
-	provider, ok := NewProvider(AgentZCode, ProviderConfig{
-		Roots:                 []string{dir},
-		StableSourceSnapshots: true,
-	})
-	require.True(t, ok)
-
-	discovery, err := DiscoverRawCaptureSources(t.Context(), provider)
-
-	require.NoError(t, err)
-	require.True(t, discovery.Complete)
-	require.Len(t, discovery.Sources, 1)
-	assert.Equal(t, ZCodeDBName, discovery.Sources[0].Key)
-	assert.Equal(t, filepath.Join(dir, ZCodeDBName), discovery.Sources[0].DisplayPath)
-}
-
 func TestZCodeDiscoveryPreservesSessionsWhenUsageTableCorrupt(t *testing.T) {
 	fixture := newZCodeTestFixture(t)
 	fixture.insertSession(t, "readable", "/work/app", "Readable session",

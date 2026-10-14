@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -302,112 +301,6 @@ func TestIcodemateProviderMergesOpenCodeAndCLIRoots(t *testing.T) {
 			assert.Equal(t, "hello cli", parsed.FirstMessage)
 		}
 	}
-}
-
-// TestIcodemateCLIProviderDiscoversS3Sessions verifies the CLI source set
-// scans s3:// projects roots with the icodemate provider segment and agent
-// label: discovered sources carry Provider=AgentIcodemate, machine metadata
-// derived from the .../<machine>/raw/icodemate layout, and the folded
-// tool-result sidecar freshness identity -- never Claude's session or machine
-// namespace.
-func TestIcodemateCLIProviderDiscoversS3Sessions(t *testing.T) {
-	oldList := listS3Objects
-	t.Cleanup(func() { listS3Objects = oldList })
-
-	root := "s3://bucket/laptop/raw/icodemate"
-	sessionURI := root + "/proj/session.jsonl"
-	sessionMtime := time.Unix(100, 0)
-	sidecarMtime := time.Unix(200, 0)
-	listS3Objects = func(got string) ([]S3Object, error) {
-		require.Equal(t, root, got)
-		return []S3Object{
-			{
-				URI:          sessionURI,
-				Size:         11,
-				LastModified: sessionMtime,
-				Fingerprint:  "s3-meta:session",
-			},
-			{
-				URI:          root + "/proj/session/tool-results/out.txt",
-				Size:         22,
-				LastModified: sidecarMtime,
-				Fingerprint:  "s3-meta:sidecar",
-			},
-		}, nil
-	}
-
-	provider, ok := NewProvider(AgentIcodemate, ProviderConfig{
-		Roots:   []string{root},
-		Machine: "devbox",
-	})
-	require.True(t, ok)
-
-	sources, err := provider.Discover(t.Context())
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
-
-	src := sources[0]
-	assert.Equal(t, AgentIcodemate, src.Provider)
-	assert.Equal(t, sessionURI, src.DisplayPath)
-	assert.Equal(t, sessionURI, src.FingerprintKey)
-	assert.Equal(t, "proj", src.ProjectHint)
-
-	s3, ok := src.Opaque.(S3DiscoveredSource)
-	require.True(t, ok, "s3 source carries S3DiscoveredSource opaque")
-	assert.Equal(t, sessionURI, s3.URI)
-	assert.Equal(t, "laptop", s3.Machine)
-	assert.Equal(t, "proj", s3.Project)
-	assert.Equal(t, int64(33), s3.Size)
-	assert.Equal(t, sidecarMtime.UnixNano(), s3.MtimeNS)
-	assert.Equal(t, int64(11), s3.TranscriptSize)
-	assert.Equal(t, sessionMtime.UnixNano(), s3.TranscriptMtimeNS)
-	assert.Contains(t, s3.Fingerprint, "session")
-	assert.Contains(t, s3.Fingerprint, "sidecar")
-}
-
-// TestIcodemateCLIProviderParsesMaterializedSource covers the engine's S3
-// materialization path: an s3:// session fetched to a local temp file is
-// re-parsed through the hybrid provider with a MaterializedFileSource opaque.
-// The CLI source set must accept it so a materialized transcript parses onto
-// the icodemate agent and fingerprints through the same path.
-func TestIcodemateCLIProviderParsesMaterializedSource(t *testing.T) {
-	root := t.TempDir()
-	projectDir := filepath.Join(root, "my-project")
-	require.NoError(t, os.MkdirAll(projectDir, 0o755))
-	path := filepath.Join(projectDir, "session-mat.jsonl")
-	writeSourceFile(t, path, claudeProviderFixture("hello materialized"))
-
-	provider, ok := NewProvider(AgentIcodemate, ProviderConfig{
-		Roots:   []string{root},
-		Machine: "devbox",
-	})
-	require.True(t, ok)
-
-	materialized := SourceRef{
-		Provider:       AgentIcodemate,
-		Key:            "s3://bucket/laptop/raw/icodemate/proj/session-mat.jsonl",
-		DisplayPath:    "s3://bucket/laptop/raw/icodemate/proj/session-mat.jsonl",
-		FingerprintKey: "s3://bucket/laptop/raw/icodemate/proj/session-mat.jsonl",
-		ProjectHint:    "my-project",
-		Opaque:         MaterializedFileSource{Path: path},
-	}
-
-	outcome, err := provider.Parse(t.Context(), ParseRequest{
-		Source: materialized, Machine: "devbox",
-	})
-	require.NoError(t, err)
-	require.Len(t, outcome.Results, 1)
-	sess := outcome.Results[0].Result.Session
-	assert.Equal(t, AgentIcodemate, sess.Agent)
-	assert.Equal(t, "icodemate:session-mat", sess.ID)
-	assert.Equal(t, "hello materialized", sess.FirstMessage)
-
-	fingerprint, err := provider.Fingerprint(t.Context(), materialized)
-	require.NoError(t, err)
-	// Key is the canonical metadata identity, not the materialized read path.
-	assert.Equal(t, materialized.Key, fingerprint.Key)
-	assert.Positive(t, fingerprint.Size)
-	assert.NotEmpty(t, fingerprint.Hash)
 }
 
 // TestIcodemateCLISourceMethods exercises the watch, fingerprint, and

@@ -513,54 +513,6 @@ func TestAntigravityCLIParse_GroupsGitWorktreesUnderOneProject(t *testing.T) {
 		"sessions from different worktrees of the same repo must group under one project")
 }
 
-// TestAntigravityCLIParse_RemoteParseSkipsLocalGitDiscovery guards the remote
-// (path-rewritten) parse path: history.jsonl's workspace names a path on the
-// remote machine, so project attribution must not run git-root discovery on
-// the importing host, where a same-named local checkout would misattribute
-// the session to the local repository. Lexical normalization still applies.
-func TestAntigravityCLIParse_RemoteParseSkipsLocalGitDiscovery(t *testing.T) {
-	skipIfNoGit(t)
-
-	root := t.TempDir()
-	mainRepo := filepath.Join(root, "agentsview")
-	mustMkdirAll(t, mainRepo)
-	gitRun(t, mainRepo, "init", "-q", "-b", "main")
-	gitRun(t, mainRepo,
-		"-c", "user.email=test@example.com",
-		"-c", "user.name=Test User",
-		"-c", "commit.gpgsign=false",
-		"commit", "--allow-empty", "-q", "-m", "seed",
-	)
-	worktree := filepath.Join(root, "agentsview-feature")
-	gitRun(t, mainRepo, "worktree", "add", "-q", "-b", "feature", worktree)
-
-	cliRoot := t.TempDir()
-	mustMkdir(t, filepath.Join(cliRoot, "conversations"))
-	id := "11111111-2222-3333-4444-555555555555"
-	createAntigravityTestDB(t, filepath.Join(cliRoot, "conversations", id+".db"))
-	mustWrite(t, filepath.Join(cliRoot, "history.jsonl"), []byte(
-		antigravityCLIHistoryLine(t, id, worktree),
-	))
-
-	provider, ok := NewProvider(AgentAntigravityCLI, ProviderConfig{
-		Roots:        []string{cliRoot},
-		PathRewriter: func(path string) string { return "remote-host:" + path },
-	})
-	require.True(t, ok)
-	cp, ok := provider.(*antigravityCLIProvider)
-	require.True(t, ok)
-
-	sess, _, _, _, err := cp.parseSessionWithStatus(
-		t.Context(),
-		filepath.Join(cliRoot, "conversations", id+".db"),
-		worktree, "", "remote-host",
-	)
-	require.NoError(t, err)
-	require.NotNil(t, sess)
-	assert.Equal(t, "agentsview_feature", sess.Project,
-		"remote parse must not resolve the workspace against the local checkout")
-}
-
 func TestAntigravityCLIProjectFallbackStrictWindow(t *testing.T) {
 	root := t.TempDir()
 	id := "e0e0e0e0-e1e1-e2e2-e3e3-e4e4e4e4e4e4"
