@@ -215,18 +215,6 @@ func TestWarnUninheritedServiceEnv(t *testing.T) {
 	assert.Contains(t, out, "config.toml")
 }
 
-func TestReadServiceLastPush_ClickHouseRejectsInsecureRemote(t *testing.T) {
-	local := dbtest.OpenTestDB(t)
-	_, err := readServiceLastPush(t.Context(), clickHouseServiceKind, config.Config{
-		ClickHouse: config.ClickHouseConfig{
-			URL: "clickhouse://user:pw@ch.example.internal:9000/agentsview",
-		},
-	}, local)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "does not use TLS")
-	assert.NotContains(t, err.Error(), "pw")
-}
-
 func TestReadServiceLastPush_UsesDefaultTargetScope(t *testing.T) {
 	local := dbtest.OpenTestDB(t)
 
@@ -321,36 +309,6 @@ func (r *recordingRunner) sawContains(sub string) bool {
 		}
 	}
 	return false
-}
-
-func TestLaunchdRender_ClickHouseKind(t *testing.T) {
-	m := &launchdManager{kind: clickHouseServiceKind, uid: 501, home: "/Users/me"}
-	spec := serviceSpec{
-		Kind:    clickHouseServiceKind,
-		BinPath: "/usr/local/bin/agentsview",
-		DataDir: "/Users/me/.agentsview",
-		LogPath: "/Users/me/.agentsview/clickhouse-watch.log",
-	}
-	got := m.render(spec)
-	assert.Contains(t, got, `<string>agentsview.clickhouse-watch</string>`)
-	assert.Contains(t, got, `<string>clickhouse</string>`)
-	assert.Contains(t, got, `<string>push</string>`)
-	assert.Contains(t, got, `<string>--watch</string>`)
-	assert.Contains(t, got, `<string>/Users/me/.agentsview/clickhouse-watch.log</string>`)
-}
-
-func TestSystemdRender_ClickHouseKind(t *testing.T) {
-	m := &systemdManager{kind: clickHouseServiceKind, user: "me", home: "/home/me"}
-	spec := serviceSpec{
-		Kind:    clickHouseServiceKind,
-		BinPath: "/usr/local/bin/agentsview",
-		DataDir: "/home/me/.agentsview",
-		LogPath: "/home/me/.agentsview/clickhouse-watch.log",
-	}
-	got := m.render(spec)
-	assert.Contains(t, got, "Description=agentsview ClickHouse auto-push")
-	assert.Contains(t, got, `ExecStart="/usr/local/bin/agentsview" clickhouse push --watch`)
-	assert.Contains(t, got, "clickhouse-watch.log")
 }
 
 func TestLaunchdRender(t *testing.T) {

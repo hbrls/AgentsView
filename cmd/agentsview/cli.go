@@ -13,7 +13,6 @@ import (
 
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/activity"
-	"go.kenn.io/agentsview/internal/clickhouse"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/server"
@@ -122,7 +121,6 @@ func newRootCommand() *cobra.Command {
 	root.AddCommand(newActivityCommand())
 	root.AddCommand(newPGCommand())
 	root.AddCommand(newRawSyncCommand())
-	root.AddCommand(newClickHouseCommand())
 	root.AddCommand(newEmbeddingsCommand())
 	root.AddCommand(newSessionCommand())
 	root.AddCommand(newMCPCommand())
@@ -667,10 +665,6 @@ func newPGCommand() *cobra.Command {
 		pgReplica{}, newPGVectorsCommand(), newPGServiceCommand(),
 		newPGHostedProvisionCommand(), newPGRawReparseCommand(),
 	)
-}
-
-func newClickHouseCommand() *cobra.Command {
-	return newReplicaCommand(clickhouse.Backend{}, newClickHouseServiceCommand())
 }
 
 func newVersionCommand() *cobra.Command {

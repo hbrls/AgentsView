@@ -18,7 +18,6 @@ import (
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/clickhouse"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/money"
@@ -160,7 +159,7 @@ func missingEnvRef(tb testing.TB, name string) string {
 func testServerWithConfig(cfg config.Config) *Server {
 	return &Server{
 		cfg:      cfg,
-		replicas: []storage.Replica{postgres.Backend{}, clickhouse.Backend{}},
+		replicas: []storage.Replica{postgres.Backend{}},
 	}
 }
 
@@ -216,48 +215,6 @@ func TestPGPushConfigRequestOverrideSkipsDaemonEnvResolution(t *testing.T) {
 	assert.Equal(t, "postgres://user:pass@host/db", got.URL)
 	assert.Equal(t, "mirror", got.Schema)
 	assert.Equal(t, "laptop", got.MachineName)
-}
-
-func TestClickHousePushTargetRequestOverride(t *testing.T) {
-	s := testServerWithConfig(config.Config{
-		ClickHouse: config.ClickHouseConfig{URL: "clickhouse://from-config"},
-	})
-	got, err := s.replicaPushTarget(clickhouse.Backend{}, daemonPushRequest{
-		Replica: &daemonReplicaTarget{
-			URL:         "clickhouse://from-request",
-			Schema:      "mirrordb",
-			MachineName: "laptop",
-		},
-	})
-	require.NoError(t, err)
-	assert.Equal(t, "clickhouse://from-request", got.URL)
-	assert.Equal(t, "mirrordb", got.Schema)
-	assert.Equal(t, "laptop", got.MachineName)
-}
-
-func TestClickHousePushTargetDefaultsToDaemonConfig(t *testing.T) {
-	s := testServerWithConfig(config.Config{
-		ClickHouse: config.ClickHouseConfig{URL: "clickhouse://from-config", Database: "agentsview"},
-	})
-	got, err := s.replicaPushTarget(clickhouse.Backend{}, daemonPushRequest{})
-	require.NoError(t, err)
-	assert.Equal(t, "clickhouse://from-config", got.URL)
-	assert.Equal(t, "agentsview", got.Schema)
-}
-
-func TestClickHousePushRejectsIncludeAndExcludeProjects(t *testing.T) {
-	s := testServerWithConfig(config.Config{})
-	_, err := s.humaReplicaPush(t.Context(), clickhouse.Backend{}, &daemonPushInput{
-		Body: daemonPushRequest{
-			Projects:        []string{"alpha"},
-			ExcludeProjects: []string{"beta"},
-		},
-	})
-	require.Error(t, err)
-	var statusErr interface{ GetStatus() int }
-	require.ErrorAs(t, err, &statusErr)
-	assert.Equal(t, http.StatusBadRequest, statusErr.GetStatus())
-	assert.Contains(t, err.Error(), "projects and exclude_projects are mutually exclusive")
 }
 
 func TestPGPushRejectsIncludeAndExcludeProjects(t *testing.T) {
@@ -319,46 +276,41 @@ func TestSyncRemotesRouteIsStreaming(t *testing.T) {
 	assertStreamingResponseContent(t, op.Responses["200"].Content)
 }
 
-// TestPushRoutesAreStreaming pins that both push routes negotiate SSE (the
+// TestPGPushRouteIsStreaming pins that the PG push route negotiates SSE (the
 // CLI's daemon-delegated push renders the streamed progress) while still
 // declaring a plain JSON response for non-streaming clients.
-func TestPushRoutesAreStreaming(t *testing.T) {
+func TestPGPushRouteIsStreaming(t *testing.T) {
 	s := testServer(t, 30)
 	spec := readOpenAPISpec(t, s.Handler())
-	for _, path := range []string{"/api/v1/push/pg", "/api/v1/push/clickhouse"} {
-		op := requireOpenAPIOperation(t, spec, "post", path)
-		require.Contains(t, op.Responses, "200", path)
-		assertStreamingResponseContent(t, op.Responses["200"].Content)
-	}
+	op := requireOpenAPIOperation(t, spec, "post", "/api/v1/push/pg")
+	require.Contains(t, op.Responses, "200")
+	assertStreamingResponseContent(t, op.Responses["200"].Content)
 }
 
-// TestPushRoutesReturn503WhileWriterClosedForSSE pins that a push during the
+// TestPGPushRouteReturns503WhileWriterClosedForSSE pins that a push during the
 // write barrier is rejected before the stream body flushes a 200: the daemon
 // CLI always negotiates SSE, so the 503 + Retry-After must be decided up
 // front rather than emitted as a generic SSE error event.
-func TestPushRoutesReturn503WhileWriterClosedForSSE(t *testing.T) {
+func TestPGPushRouteReturns503WhileWriterClosedForSSE(t *testing.T) {
 	s := testServer(t, 30*time.Second)
 	database := s.db.(*db.DB)
 	require.NoError(t, database.CloseWriter())
 	defer func() { assert.NoError(t, database.ReopenWriter()) }()
 
-	for _, path := range []string{"/api/v1/push/pg", "/api/v1/push/clickhouse"} {
-		req := httptest.NewRequestWithContext(t.Context(),
-			http.MethodPost, path, strings.NewReader(`{"full":false}`),
-		)
-		req.Host = "127.0.0.1:0"
-		req.RemoteAddr = "127.0.0.1:1234"
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Accept", "text/event-stream")
-		req.Header.Set("Origin", "http://127.0.0.1:0")
-		w := httptest.NewRecorder()
-		s.Handler().ServeHTTP(w, req)
+	req := httptest.NewRequestWithContext(t.Context(),
+		http.MethodPost, "/api/v1/push/pg", strings.NewReader(`{"full":false}`),
+	)
+	req.Host = "127.0.0.1:0"
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("Origin", "http://127.0.0.1:0")
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, req)
 
-		require.Equal(t, http.StatusServiceUnavailable, w.Code,
-			"%s body: %s", path, w.Body.String())
-		assert.Equal(t, "5", w.Header().Get("Retry-After"),
-			"%s: a writer-closed push must advertise Retry-After", path)
-	}
+	require.Equal(t, http.StatusServiceUnavailable, w.Code, "body: %s", w.Body.String())
+	assert.Equal(t, "5", w.Header().Get("Retry-After"),
+		"a writer-closed push must advertise Retry-After")
 }
 
 // TestSyncThenRunForPushWorkerRunnerRouting pins the daemon push coordinator:
@@ -846,26 +798,4 @@ func TestReplicaPushTargetOmittedPushVectorsDefaultsOn(t *testing.T) {
 			assert.Equal(t, tt.want, got.PushVectors)
 		})
 	}
-}
-
-// TestClickHousePushRejectsPlaintextTargetBeforeStream pins that a ClickHouse
-// target the backend refuses (plaintext to a non-loopback host without
-// allow_insecure) fails with a 400 from the handler, before the stream opens
-// and before any local sync pass runs.
-func TestClickHousePushRejectsPlaintextTargetBeforeStream(t *testing.T) {
-	s := testServer(t, 30*time.Second)
-	_, err := s.humaReplicaPush(t.Context(), clickhouse.Backend{}, &daemonPushInput{
-		Body: daemonPushRequest{
-			Replica: &daemonReplicaTarget{
-				URL:         "clickhouse://user:pw@ch.example.test:9000/agentsview",
-				Schema:      "agentsview",
-				MachineName: "laptop",
-			},
-		},
-	})
-	require.Error(t, err)
-	var statusErr interface{ GetStatus() int }
-	require.ErrorAs(t, err, &statusErr)
-	assert.Equal(t, http.StatusBadRequest, statusErr.GetStatus())
-	assert.Contains(t, err.Error(), "allow_insecure")
 }

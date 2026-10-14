@@ -41,17 +41,6 @@ var pgServiceKind = serviceKind{
 	Product:     "PostgreSQL",
 }
 
-var clickHouseServiceKind = serviceKind{
-	Name:        "clickhouse",
-	Label:       "agentsview.clickhouse-watch",
-	UnitName:    "agentsview-clickhouse-watch.service",
-	Args:        []string{"clickhouse", "push", "--watch"},
-	LogName:     "clickhouse-watch.log",
-	Description: "agentsview ClickHouse auto-push",
-	RuntimeEnv:  []string{"AGENTSVIEW_CLICKHOUSE_DATABASE", "AGENTSVIEW_CLICKHOUSE_MACHINE"},
-	Product:     "ClickHouse",
-}
-
 // serviceSpec is the resolved input for rendering a unit file.
 type serviceSpec struct {
 	Kind    serviceKind
@@ -180,23 +169,6 @@ func buildServiceSpec(appCfg config.Config, kind serviceKind) (serviceSpec, erro
 }
 
 func validateServiceKindURL(appCfg config.Config, kind serviceKind) error {
-	if kind.Name == "clickhouse" {
-		raw, err := appCfg.RawClickHouseTarget("")
-		if err != nil {
-			return err
-		}
-		if err := rejectEnvDependentServiceClickHouseURL(raw.URL); err != nil {
-			return err
-		}
-		chCfg, err := appCfg.ResolveClickHouse()
-		if err != nil {
-			return err
-		}
-		if chCfg.URL == "" {
-			return errors.New("clickhouse url not configured; configure a legacy [clickhouse].url or the default_clickhouse-selected [clickhouse.NAME].url before installing the service")
-		}
-		return nil
-	}
 	rawPG, err := appCfg.RawPGTarget("")
 	if err != nil {
 		return err
@@ -210,24 +182,6 @@ func validateServiceKindURL(appCfg config.Config, kind serviceKind) error {
 	}
 	if pgCfg.URL == "" {
 		return errors.New("pg url not configured; configure a legacy [pg].url or the default_pg-selected [pg.NAME].url before installing the service")
-	}
-	return nil
-}
-
-func rejectEnvDependentServiceClickHouseURL(rawURL string) error {
-	if os.Getenv("AGENTSVIEW_CLICKHOUSE_URL") != "" {
-		return errors.New("AGENTSVIEW_CLICKHOUSE_URL is set; clickhouse service install requires a " +
-			"literal ClickHouse URL in config.toml, either " +
-			"legacy [clickhouse].url or the default_clickhouse-selected [clickhouse.NAME].url, because background " +
-			"services do not inherit your shell environment",
-		)
-	}
-	if config.IsEnvDependentURL(rawURL) {
-		return errors.New("clickhouse.url uses environment variable expansion; clickhouse service " +
-			"install requires a literal ClickHouse URL in config.toml, either " +
-			"legacy [clickhouse].url or the default_clickhouse-selected [clickhouse.NAME].url, because " +
-			"background services do not inherit your shell environment",
-		)
 	}
 	return nil
 }

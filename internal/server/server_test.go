@@ -28,7 +28,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"go.kenn.io/agentsview/internal/clickhouse"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
@@ -162,7 +161,7 @@ func setupWithServerOptsAndDBTemplate(
 
 	// Prepend so caller-provided srvOpts can still override.
 	srvOpts = append([]server.Option{server.WithBroadcaster(broadcaster)}, srvOpts...)
-	srvOpts = append(srvOpts, server.WithReplicas(postgres.Backend{}, clickhouse.Backend{}))
+	srvOpts = append(srvOpts, server.WithReplicas(postgres.Backend{}))
 	srv := server.New(cfg, database, engine, srvOpts...)
 
 	return &testEnv{
@@ -276,7 +275,7 @@ func setupNoSyncMode(t *testing.T) *testEnv {
 	srv := server.New(
 		cfg, database, nil,
 		server.WithBroadcaster(broadcaster),
-		server.WithReplicas(postgres.Backend{}, clickhouse.Backend{}),
+		server.WithReplicas(postgres.Backend{}),
 	)
 
 	return &testEnv{
@@ -3261,7 +3260,7 @@ func TestPingReportsStalledSyncWithoutLosingDaemonIdentity(t *testing.T) {
 	})
 	t.Cleanup(engine.Close)
 	te := &testEnv{
-		srv: server.New(cfg, database, engine, server.WithReplicas(postgres.Backend{}, clickhouse.Backend{})), db: database, engine: engine,
+		srv: server.New(cfg, database, engine, server.WithReplicas(postgres.Backend{})), db: database, engine: engine,
 		dataDir: dir,
 	}
 	te.handler = wrapTestHandler(cfg, te.srv.Handler())

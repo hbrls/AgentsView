@@ -336,7 +336,6 @@ export * from "./postApiV1ImportClaudeAiBody.ts";
 export * from "./postApiV1ImportClaudeAiParams.ts";
 export * from "./postApiV1InsightsByIdPublishParams.ts";
 export * from "./postApiV1InsightsByIdPublishPathParameters.ts";
-export * from "./postApiV1PushClickhouse200One.ts";
 export * from "./postApiV1PushPg200One.ts";
 export * from "./postApiV1RecallEntriesByIdReviewPathParameters.ts";
 export * from "./postApiV1RecallExtractionGenerationsByFingerprintRetirePathParameters.ts";
