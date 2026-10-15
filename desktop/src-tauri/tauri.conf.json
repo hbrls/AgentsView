@@ -31,7 +31,7 @@
     "copyright": "Copyright 2026 Kenn Software LLC",
     "shortDescription": "Local viewer for AI agent sessions",
     "longDescription": "AgentsView is a local web viewer for AI agent coding sessions.",
-    "createUpdaterArtifacts": "v1Compatible",
+    "createUpdaterArtifacts": false,
     "externalBin": [
       "binaries/agentsview"
     ],
