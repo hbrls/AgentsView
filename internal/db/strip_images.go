@@ -134,12 +134,6 @@ func (db *DB) rewriteStoredToolResultRows(
 		return false, fmt.Errorf("beginning tool result strip: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	queueGenerationBefore, queueExistedBefore, err := artifactExportGenerationTx(
-		tx, sessionID,
-	)
-	if err != nil {
-		return false, err
-	}
 	var pendingRecallRevocations recallEvidenceRevocationEvents
 
 	type storedToolResultKey struct {
@@ -315,11 +309,6 @@ func (db *DB) rewriteStoredToolResultRows(
 		return false, err
 	}
 	if err := invalidateSessionSignalsTx(ctx, tx, sessionID); err != nil {
-		return false, err
-	}
-	if err := enqueueArtifactExportIfGenerationUnchangedTx(
-		tx, sessionID, queueGenerationBefore, queueExistedBefore,
-	); err != nil {
 		return false, err
 	}
 	if err := tx.Commit(); err != nil {

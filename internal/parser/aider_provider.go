@@ -21,17 +21,11 @@ import (
 // discovery surfaces the history file as one source and Parse fans it out into
 // one session per run, addressed by "<history>#<runIdx>" virtual paths. All
 // behavior is wired into the shared multi-session-container base via options.
-//
-// The PathRewriter (identity) maps an on-disk history path to its canonical
-// stored form during remote sync, so per-run session IDs stay stable across
-// syncs that extract the file to a different temp directory. It is threaded
-// into the option closures by the build func and is nil for local sync.
 func newAiderProviderFactory(def AgentDef) ProviderFactory {
 	return NewMultiSessionProviderFactory(
 		def,
 		aiderProviderCapabilities(),
 		func(cfg ProviderConfig) multiSessionContainerSourceSet {
-			identity := cfg.PathRewriter
 			return NewMultiSessionContainerSourceSet(
 				AgentAider,
 				cfg.Roots,
@@ -39,7 +33,7 @@ func newAiderProviderFactory(def AgentDef) ProviderFactory {
 				WithStreamingSourceDiscovery(
 					func(ctx context.Context, root string, yield func(multiSessionMatch) error) error {
 						return streamAiderContainers(ctx, root, func(container string) error {
-							idPath := aiderIdentityForPath(container, identity)
+							idPath := ""
 							if err := streamAiderRunIndexes(ctx, container, idPath, func(idx int, rawID string) error {
 								return yield(multiSessionMatch{
 									Path:      AiderVirtualPath(container, idx),
@@ -57,22 +51,20 @@ func newAiderProviderFactory(def AgentDef) ProviderFactory {
 				WithChangedPathClassifier(aiderClassifyPath),
 				WithMemberLookup(
 					func(_ context.Context, root, rawID string) (multiSessionMatch, bool) {
-						return aiderFindMember(root, rawID, identity)
+						return aiderFindMember(root, rawID)
 					},
 				),
 				WithReconciliationIdentity(
 					func(ctx context.Context, match multiSessionMatch) (string, error) {
-						return aiderReconciliationIdentity(ctx, match, identity)
+						return aiderReconciliationIdentity(ctx, match)
 					},
 					func(fullSessionID string) string {
 						return ProviderRawSessionIDFromFull(def, fullSessionID)
 					},
 				),
-				// A canonical remote-sync path (rewritten identity) must map
-				// back onto a local history file before it can classify.
 				WithStoredPathFallback(
 					func(root, path string) (multiSessionMatch, bool) {
-						return aiderStoredPathFallback(root, path, identity)
+						return aiderStoredPathFallback(root, path)
 					},
 				),
 				// Aider run paths are positional ("<history>#<idx>"), so a
@@ -81,18 +73,18 @@ func newAiderProviderFactory(def AgentDef) ProviderFactory {
 				// inserted or removed earlier run silently resyncs the wrong run.
 				WithFreshStoredMember(
 					func(src multiSessionSource, rawID string) bool {
-						return aiderStoredMemberMatchesRawID(src, rawID, identity)
+						return aiderStoredMemberMatchesRawID(src, rawID)
 					},
 				),
 				WithContextFingerprint(aiderFingerprintSourceContext),
 				WithContainerParse(
 					func(src multiSessionSource, req ParseRequest) ([]ParseResult, error) {
-						return aiderParseContainer(src, req.Machine, identity)
+						return aiderParseContainer(src, req.Machine)
 					},
 				),
 				WithContextMemberParse(
 					func(ctx context.Context, src multiSessionSource, req ParseRequest) (*ParseResult, error) {
-						return aiderParseMemberContext(ctx, src, req.Machine, identity)
+						return aiderParseMemberContext(ctx, src, req.Machine)
 					},
 				),
 				// Every run shares the history file's content hash, so a write
@@ -374,7 +366,7 @@ func replayCachedAiderRuns(
 }
 
 func aiderReconciliationIdentity(
-	ctx context.Context, match multiSessionMatch, identity func(string) string,
+	ctx context.Context, match multiSessionMatch,
 ) (string, error) {
 	idx, err := strconv.Atoi(match.MemberID)
 	if err != nil {
@@ -392,12 +384,12 @@ func aiderReconciliationIdentity(
 			return "", fmt.Errorf("decode cached aider run identity: %w", err)
 		}
 		return aiderRawID(
-			aiderIdentityPath(match.Container, aiderIdentityForPath(match.Container, identity)),
+			aiderIdentityPath(match.Container, ""),
 			cached.RawHeader, cached.Ordinal,
 		), nil
 	}
 	rawID, ok := aiderRawIDAtWithID(
-		match.Container, aiderIdentityForPath(match.Container, identity), idx,
+		match.Container, "", idx,
 	)
 	if !ok {
 		return "", nil
@@ -459,14 +451,14 @@ func aiderClassifyPath(root, path string, _ bool) (multiSessionMatch, bool) {
 }
 
 func aiderFindMember(
-	root, rawID string, identity func(string) string,
+	root, rawID string,
 ) (multiSessionMatch, bool) {
 	if rawID == "" {
 		return multiSessionMatch{}, false
 	}
 	for _, df := range discoverAiderSessions(root) {
 		virtualPath, ok := aiderVirtualPathForRawIDWithID(
-			df.Path, aiderIdentityForPath(df.Path, identity), rawID,
+			df.Path, "", rawID,
 		)
 		if !ok {
 			continue
@@ -479,13 +471,13 @@ func aiderFindMember(
 }
 
 func aiderStoredPathFallback(
-	root, path string, identity func(string) string,
+	root, path string,
 ) (multiSessionMatch, bool) {
 	if path == "" {
 		return multiSessionMatch{}, false
 	}
 	for _, df := range discoverAiderSessions(root) {
-		localPath, ok := localAiderPathForCanonicalHint(df.Path, path, identity)
+		localPath, ok := localAiderPathForCanonicalHint(df.Path, path)
 		if !ok {
 			continue
 		}
@@ -501,12 +493,9 @@ func aiderStoredPathFallback(
 // local virtual run path. It mirrors the legacy provider helper of the same
 // name.
 func localAiderPathForCanonicalHint(
-	historyPath, hint string, identity func(string) string,
+	historyPath, hint string,
 ) (string, bool) {
-	idPath := aiderIdentityForPath(historyPath, identity)
-	if idPath == "" {
-		idPath = aiderAbsPath(historyPath)
-	}
+	idPath := aiderAbsPath(historyPath)
 	if hint == idPath {
 		return historyPath, true
 	}
@@ -515,17 +504,6 @@ func localAiderPathForCanonicalHint(
 		return "", false
 	}
 	return AiderVirtualPath(historyPath, idx), true
-}
-
-// aiderIdentityForPath returns the canonical identity path used to seed per-run
-// session IDs: the rewritten path during remote sync, or "" locally (which
-// makes the parser fall back to the on-disk absolute path). It mirrors the
-// legacy Engine.aiderIdentityPath / aiderProvider.identityPath.
-func aiderIdentityForPath(historyPath string, identity func(string) string) string {
-	if identity == nil {
-		return ""
-	}
-	return identity(historyPath)
 }
 
 func aiderVirtualPathForRawIDWithID(
@@ -556,7 +534,7 @@ func aiderVirtualPathForRawIDWithID(
 // unreadable file, an out-of-range index, or a remote identity that does not
 // reproduce the stored hash) returns false so the base re-resolves by raw ID.
 func aiderStoredMemberMatchesRawID(
-	src multiSessionSource, rawID string, identity func(string) string,
+	src multiSessionSource, rawID string,
 ) bool {
 	if rawID == "" {
 		return false
@@ -565,7 +543,7 @@ func aiderStoredMemberMatchesRawID(
 	if err != nil {
 		return false
 	}
-	idPath := aiderIdentityForPath(src.Container, identity)
+	idPath := ""
 	got, ok := aiderRawIDAtWithID(src.Container, idPath, idx)
 	return ok && got == rawID
 }
@@ -634,13 +612,13 @@ func aiderFingerprintSourceContext(
 }
 
 func aiderParseMember(
-	src multiSessionSource, machine string, identity func(string) string,
+	src multiSessionSource, machine string,
 ) (*ParseResult, error) {
 	idx, err := strconv.Atoi(src.MemberID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid aider run index %q: %w", src.MemberID, err)
 	}
-	idPath := aiderIdentityForPath(src.Container, identity)
+	idPath := ""
 	sess, msgs, err := parseAiderRunWithID(src.Container, idPath, idx, machine)
 	if err != nil {
 		return nil, err
@@ -653,7 +631,6 @@ func aiderParseMember(
 
 func aiderParseMemberContext(
 	ctx context.Context, src multiSessionSource, machine string,
-	identity func(string) string,
 ) (*ParseResult, error) {
 	idx, err := strconv.Atoi(src.MemberID)
 	if err != nil {
@@ -664,7 +641,7 @@ func aiderParseMemberContext(
 		return nil, err
 	}
 	if !found {
-		return aiderParseMember(src, machine, identity)
+		return aiderParseMember(src, machine)
 	}
 	observeStreamingRetainedBytes(ctx, int64(len(encoded)))
 	defer observeStreamingRetainedBytes(ctx, -int64(len(encoded)))
@@ -679,7 +656,7 @@ func aiderParseMemberContext(
 	run := aiderRun{rawHeader: cached.RawHeader, body: cached.Body}
 	run.started, run.hasTime = parseAiderTimestamp(cached.RawHeader)
 	sess, msgs := buildAiderRunSession(
-		src.Container, aiderIdentityForPath(src.Container, identity), machine,
+		src.Container, "", machine,
 		info, run, idx, cached.Ordinal,
 	)
 	if sess == nil {
@@ -689,9 +666,9 @@ func aiderParseMemberContext(
 }
 
 func aiderParseContainer(
-	src multiSessionSource, machine string, identity func(string) string,
+	src multiSessionSource, machine string,
 ) ([]ParseResult, error) {
-	idPath := aiderIdentityForPath(src.Container, identity)
+	idPath := ""
 	return parseAiderRunsWithID(src.Container, idPath, machine)
 }
 

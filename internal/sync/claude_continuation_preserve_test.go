@@ -149,27 +149,3 @@ func TestClaudeContinuationMissingSourcePreservesArchive(t *testing.T) {
 		})
 	}
 }
-
-func TestClaudeS3WritesDoNotRetainTemporaryContributors(t *testing.T) {
-	database := openTestDB(t)
-	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local"})
-	t.Cleanup(engine.Close)
-	write := pendingWrite{
-		sess: parser.ParsedSession{
-			ID: "s3:agent-reviewer", Agent: parser.AgentClaude, Machine: "local", Project: "project",
-			File:                  parser.FileInfo{Path: "s3://example-bucket/project/parent/subagents/agent-reviewer.jsonl"},
-			ClaudeSubagentSources: []string{filepath.Join(t.TempDir(), "removed-materialization.jsonl")},
-		},
-		msgs: []parser.ParsedMessage{{Ordinal: 0, Role: parser.RoleUser, Content: "original"}},
-	}
-	require.Equal(t, 1, engine.writeBatchWithOutcome([]pendingWrite{write}, syncWriteDefault, true).writtenSessions)
-	paths, err := database.GetClaudeSubagentSources(t.Context(), write.sess.ID)
-	require.NoError(t, err)
-	assert.Empty(t, paths)
-	write.msgs[0].Content = "updated"
-	require.Equal(t, 1, engine.writeBatchWithOutcome([]pendingWrite{write}, syncWriteDefault, true).writtenSessions)
-	messages, err := database.GetAllMessages(t.Context(), write.sess.ID)
-	require.NoError(t, err)
-	require.Len(t, messages, 1)
-	assert.Equal(t, "updated", messages[0].Content)
-}

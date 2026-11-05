@@ -57,7 +57,6 @@ type ReconciliationMetrics struct {
 	MaxRehydratedSources         int
 	MaxWorkerResults             int
 	MaxPendingWrites             int
-	ExcludedRemoteRoots          int
 	GlobalLinkPasses             int
 	MaxProviderRetainedBytes     int64
 	SharedContainerScans         int

@@ -91,7 +91,7 @@ func icodemateProviderCapabilities() Capabilities {
 	caps.Source.MultiSessionSource = CapabilitySupported
 	caps.Source.ExcludedSessions = CapabilitySupported
 	caps.Source.ForceReplaceOnParse = CapabilitySupported
-	caps.Source.S3Discovery = CapabilitySupported
+
 	caps.Content.SessionName = CapabilitySupported
 	caps.Content.GitBranch = CapabilitySupported
 	caps.Content.Subagents = CapabilitySupported
@@ -219,7 +219,7 @@ func (p *icodemateProvider) Fingerprint(
 	switch source.Opaque.(type) {
 	case openCodeFormatSource, *openCodeFormatSource:
 		return p.opencode.Fingerprint(ctx, source)
-	case claudeSource, *claudeSource, MaterializedFileSource:
+	case claudeSource, *claudeSource:
 		return p.cli.Fingerprint(ctx, source)
 	default:
 		return SourceFingerprint{}, errors.New("icodemate source path unavailable")
@@ -233,7 +233,7 @@ func (p *icodemateProvider) Parse(
 	switch req.Source.Opaque.(type) {
 	case openCodeFormatSource, *openCodeFormatSource:
 		return p.opencode.Parse(ctx, req)
-	case claudeSource, *claudeSource, MaterializedFileSource:
+	case claudeSource, *claudeSource:
 		req.Machine = firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
 		return p.cli.Parse(ctx, req)
 	default:

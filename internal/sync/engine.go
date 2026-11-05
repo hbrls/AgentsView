@@ -454,7 +454,7 @@ type EngineConfig struct {
 	AgentDirs      map[parser.AgentType][]string
 	SourceMachines map[parser.AgentType]map[string]string
 	// ProviderMetadata carries the resolved metadata directories used to
-	// configure provider instances, including temporary remote imports.
+	// configure provider instances.
 	ProviderMetadata map[parser.AgentType]map[string][]string
 	// DisabledAgents identifies providers omitted from this local filesystem
 	// engine. Remote import engines leave it empty and import every transferred
@@ -478,9 +478,7 @@ type EngineConfig struct {
 	// sessions whose working directory equals one of the prefixes
 	// or lives underneath one. Sessions without a recorded cwd are
 	// skipped while the filter is active. Populated from the
-	// sync_include_cwd_prefixes config option for local sync;
-	// remote sync leaves it empty because the prefixes describe
-	// local paths.
+	// sync_include_cwd_prefixes config option.
 	IncludeCwdPrefixes []string
 	// ScanProtectedPaths lets local Git discovery read working directories
 	// inside macOS TCC-protected locations (Documents, Downloads, Desktop,
@@ -491,25 +489,6 @@ type EngineConfig struct {
 	// scan_protected_paths config option. The safe default belongs to the
 	// zero value so an engine built without the option never prompts.
 	ScanProtectedPaths bool
-	// IDPrefix is prepended to all session IDs. Used by
-	// remote sync to namespace IDs by host (e.g. "host~").
-	IDPrefix string
-	// PathRewriter transforms file paths before storage.
-	// Used by remote sync and archived sources to replace temporary paths
-	// with stable references. Independent of IDPrefix.
-	PathRewriter func(string) string
-	// StoredPathResolver maps a canonical stored source path back to its
-	// physical path under the current mirror. Remote changed-path planning uses
-	// it to make persisted source hints usable by mirror-local providers.
-	StoredPathResolver func(storedPath string) (physicalPath string, ok bool)
-	// CompleteSourceMirror means resolved source paths cover the remote's
-	// complete export. A missing resolved file can prove a source is gone.
-	// Leave false for partial extracts; a full parse alone proves no coverage.
-	CompleteSourceMirror bool
-	// InitialSkipCache seeds an ephemeral engine with caller-owned translated
-	// skip state. Rebuild contributors use it because their engine is created
-	// inside the atomic replacement workflow.
-	InitialSkipCache map[string]int64
 	// Ephemeral disables sync-state persistence (timestamps
 	// and skip cache) so remote sync does not interfere with
 	// local sync watermarks or pollute the skipped_files table
@@ -629,37 +608,22 @@ type Engine struct {
 	// after a complete one.
 	failures failurecache.Cache
 	// skipCacheDirty is protected by skipMu and cleared only for a persistence attempt.
-	skipCacheDirty   bool
-	skipFingerprints map[string]string
+	skipCacheDirty bool
 	// piebaldFailureMemo suppresses repeated ordinary parse failures per virtual source.
 	piebaldFailureMemo map[string]piebaldFailureMemoEntry
-	// retryUnsafeSkipPaths records sources whose successful processing changed
-	// exclusion or source-missing state in the current database. A rebuild that
-	// later fails discards those database changes, so its skip entries cannot be
-	// carried into the next attempt.
-	retryUnsafeSkipPaths map[string]struct{}
 	// skipHashKeys maps a source base path to its one current
 	// ?source_hash= cache key. It is built once when the cache loads so a
 	// watcher mutation never scans unrelated archive entries.
-	skipHashKeys      map[string]string
-	s3CodexIndexMu    gosync.Mutex
-	s3CodexIndexCache map[string]s3CodexIndexSnapshot
+	skipHashKeys map[string]string
 	// checkpointAudit, when set, bypasses the checkpoint stat-trust gate so
 	// the provider's full-source fingerprint verifies content. The periodic
 	// archive audit sets it to catch same-stat in-place rewrites that
 	// append-trust would otherwise keep stale.
-	checkpointAudit atomic.Bool
-	// idPrefix and pathRewriter support remote sync:
-	// prefix all session IDs to avoid collisions, rewrite
-	// temp paths to "host:/remote/path" form.
+	checkpointAudit         atomic.Bool
 	ephemeral               bool
 	discardWritesOnCancel   bool
 	disableSignalRecompute  bool
 	disableProjectDiscovery bool
-	idPrefix                string
-	pathRewriter            func(string) string
-	storedPathResolver      func(string) (string, bool)
-	completeSourceMirror    bool
 	emitter                 Emitter
 	providerMigrationModes  map[parser.AgentType]parser.ProviderMigrationMode
 
@@ -716,7 +680,7 @@ type Engine struct {
 	bulkRetentionOnce         gosync.Once
 	bulkRetentionBudget       *parseRetentionBudget
 	// activeRetention points at the budget the in-flight pass admits parses
-	// through. Bulk archive passes (full sync, resync rebuild, remote import)
+	// through. Bulk archive passes (full sync, resync rebuild)
 	// install the byte-weighted bulk budget for their duration; when nil,
 	// incremental paths (watcher, scoped/periodic syncs, reconciliation
 	// pages, single-session syncs) use the bounded default budget.
@@ -731,11 +695,6 @@ type Engine struct {
 	// also marks files ForceParse, but provider-specific paths must still bypass
 	// every freshness gate if that per-file bit is not carried forward.
 	forceFullParse bool
-	// forceFullParseAllowsCache retains the complete-parse requirement while
-	// allowing a durable error-skip entry to prove that a source was already
-	// attempted. Remote journal replay uses this after cache invalidation was
-	// durably consumed.
-	forceFullParseAllowsCache bool
 
 	// phaseStats accumulates per-phase wall-clock time inside the bulk
 	// write path. Exposed via PhaseStats() so a CLI driver can log the
@@ -802,9 +761,7 @@ type Engine struct {
 }
 
 // forceParseRequested centralizes the parse modes that require complete source
-// processing and preserve every parsed result. The separate cache predicate
-// lets remote replay suppress sources whose post-invalidation attempt is
-// already durable.
+// processing and preserve every parsed result.
 func (e *Engine) forceParseRequested(file parser.DiscoveredFile) bool {
 	return e.forceParse || e.forceFullParse || file.ForceParse ||
 		file.ForceFullParse
@@ -812,7 +769,7 @@ func (e *Engine) forceParseRequested(file parser.DiscoveredFile) bool {
 
 func (e *Engine) forceParseBypassesCache(file parser.DiscoveredFile) bool {
 	return e.forceParse || file.ForceParse ||
-		(e.forceFullParse && !e.forceFullParseAllowsCache)
+		e.forceFullParse
 }
 
 // ReconciliationResult is the structured acknowledgement for the most recent
@@ -939,7 +896,7 @@ func NewEngine(ctx context.Context,
 		migrateLegacyCodexExecSkips(ctx, database, skipCache)
 		migrateVisualStudioCopilotSkips(ctx, database, skipCache)
 	}
-	skipHashKeys, _ := normalizeSourceHashSkipCache(skipCache, nil)
+	skipHashKeys, _ := normalizeSourceHashSkipCache(skipCache)
 
 	providerFactories := parser.ProviderFactories()
 	if cfg.ProviderFactories != nil {
@@ -987,9 +944,8 @@ func NewEngine(ctx context.Context,
 		// Parsers extract project names by probing recorded cwds for git
 		// roots; that guard is package-level because extraction runs deep
 		// inside per-format code with no engine to consult. The opt-in only
-		// ever enables it: engines built without the option (remote sync,
-		// the identity backfill) must not revoke the user's process-wide
-		// choice.
+		// ever enables it: engines built without the option must not revoke
+		// the user's process-wide choice.
 		parser.SetAllowProtectedPathProbes(true)
 	}
 	progressStallAfter := cfg.ProgressStallAfter
@@ -1019,23 +975,13 @@ func NewEngine(ctx context.Context,
 		goos:                    runtime.GOOS,
 		skipCache:               skipCache,
 		skipCacheDirty:          true,
-		skipFingerprints:        make(map[string]string),
 		piebaldFailureMemo:      make(map[string]piebaldFailureMemoEntry),
 		skipHashKeys:            skipHashKeys,
-		s3CodexIndexCache:       make(map[string]s3CodexIndexSnapshot),
 		ephemeral:               cfg.Ephemeral,
 		discardWritesOnCancel:   cfg.DiscardPendingWritesOnCancel,
 		disableSignalRecompute: cfg.DisableSignalRecomputation ||
 			database.ArchiveContent().UsageOnly(),
 		disableProjectDiscovery: cfg.DisableFilesystemProjectDiscovery,
-		frictionEnabled:         cfg.FrictionEnabled,
-		stableSourceSnapshots:   cfg.StableSourceSnapshots,
-		idPrefix:                cfg.IDPrefix,
-		archiveSessionPolicy:    cfg.ArchiveSessionPolicy,
-		parserExclusionPolicy:   cfg.ParserExclusionPolicy,
-		pathRewriter:            cfg.PathRewriter,
-		storedPathResolver:      cfg.StoredPathResolver,
-		completeSourceMirror:    cfg.CompleteSourceMirror,
 		emitter:                 cfg.Emitter,
 		providerMigrationModes:  providerModes,
 		digestVerifiedAt:        make(map[string]time.Time),
@@ -1062,9 +1008,6 @@ func NewEngine(ctx context.Context,
 		if err := e.failures.Load(ctx, database); err != nil {
 			log.Printf("%v", err)
 		}
-	}
-	if len(cfg.InitialSkipCache) > 0 {
-		e.InjectSkipCache(cfg.InitialSkipCache)
 	}
 	if !cfg.DeferStartupMaintenance {
 		e.ReleaseStartupMaintenance()
@@ -1294,13 +1237,6 @@ func buildProviderStatHashers(
 // matching source's write batch commits successfully, so a CWD-filtered
 // or failed write cannot mark an absent or stale session as fresh.
 //
-// physicalPath is the on-disk chat path the hasher stats (the path that
-// actually exists locally, even when pathRewriter rewrites the stored
-// file_path to a logical "host:/remote/path" for remote imports).
-// targetKey is the cache key the engine uses for both the digest lookup
-// and persistence, so remote-synced sessions hash their materialized
-// file but store the digest under their canonical logical key.
-//
 // digest is the per-component stat snapshot the hasher computed at
 // staging time. Capturing it here closes a TOCTOU window between
 // provider.Fingerprint (which stats and parses a stable file state)
@@ -1325,10 +1261,7 @@ type pendingProviderStatHash struct {
 // implementation carry a zero digest and are silently skipped here:
 // their freshness is owned by the engine's existing skip-cache path,
 // and the staging site does not populate res.providerStatHash for
-// non-multi-file agents. The cache key (targetKey) and the hashed path
-// (physicalPath) are kept distinct so a remote import whose
-// pathRewriter rewrites the stored file_path to a logical
-// "host:/remote/path" still hashes the materialized local file.
+// non-multi-file agents.
 func (e *Engine) recordProviderStatHash(
 	ctx context.Context,
 	hash pendingProviderStatHash,
@@ -1543,9 +1476,7 @@ func migrateVisualStudioCopilotSkips(ctx context.Context,
 
 // IsVisualStudioCopilotSkipPath reports whether a skip cache key
 // belongs to a Visual Studio Copilot trace: either a physical
-// trace file or a <traceFile>#<conversationID> virtual path. It
-// is shared with remote sync so both the local and remote skip
-// migrations classify paths identically.
+// trace file or a <traceFile>#<conversationID> virtual path.
 func IsVisualStudioCopilotSkipPath(path string) bool {
 	if parser.IsVisualStudioCopilotTraceFile(path) {
 		return true
@@ -1902,7 +1833,6 @@ func (e *Engine) applyChangedPathSyncLocked(
 		revokeErr := e.revokeSQLiteContainerVerification(ctx, prepared.preContainerStates)
 		return SyncStats{}, 0, errors.Join(prepared.classificationErr, revokeErr)
 	}
-	e.resetS3CodexIndexCache()
 	e.resetSourceClaims()
 	e.anomalies.reset()
 	// Begin a container pass so an already-trusted, unchanged container
@@ -1923,7 +1853,7 @@ func (e *Engine) applyChangedPathSyncLocked(
 		processingCtx, results, len(prepared.files), len(prepared.files), nil,
 		syncWriteDefault, collectAndBatchOptions{
 			observeResult: func(job syncJob) {
-				affectedSessionIDs.observe(job, e.idPrefix)
+				affectedSessionIDs.observe(job)
 			},
 		},
 	)
@@ -2183,7 +2113,6 @@ func (e *Engine) classifyProviderChangedPath(
 			Roots:          roots,
 			Machine:        e.machine,
 			SourceMachines: e.sources().sourceMachines[agentType],
-			PathRewriter:   e.pathRewriter,
 		})
 		def := provider.Definition()
 		watchRoots, err := e.providerChangedPathWatchRoots(
@@ -2349,11 +2278,9 @@ func (e *Engine) classifyProviderChangedPath(
 					ProviderSource:  &sourceCopy,
 					ProviderProcess: mode == parser.ProviderMigrationProviderAuthoritative,
 				}
-				if !isS3SourcePath(sourcePath) {
-					discovered.Machine = e.machineForProviderSource(
-						agent, source, sourcePath,
-					)
-				}
+				discovered.Machine = e.machineForProviderSource(
+					agent, source, sourcePath,
+				)
 				// A watcher event names a concrete change even when the
 				// session's stat signature cannot see it (a same-size,
 				// same-mtime child rewrite), so the storage gate must
@@ -2394,7 +2321,7 @@ func (e *Engine) expandOmnigentInheritedMetadataSources(
 		if !found {
 			continue
 		}
-		parentID := applyIDPrefixToID(e.idPrefix, rawID)
+		parentID := rawID
 		if _, exists := seenParents[parentID]; exists {
 			continue
 		}
@@ -2438,15 +2365,7 @@ func (e *Engine) expandOmnigentInheritedMetadataSources(
 	}
 	for _, storedPath := range paths {
 		path := storedPath
-		if e.storedPathResolver != nil {
-			resolved, ok := e.storedPathResolver(storedPath)
-			if !ok {
-				return nil, errors.New(
-					"resolve omnigent stored descendant source path",
-				)
-			}
-			path = resolved
-		}
+
 		if _, exists := seenSources[path]; exists {
 			continue
 		}
@@ -2750,18 +2669,10 @@ func dedupeDiscoveredFilesByPreference(
 func discoveredFileKey(file parser.DiscoveredFile) string {
 	if isCodexFormatAgent(file.Agent) {
 		if id := parser.CodexSessionUUIDFromFilename(filepath.Base(file.Path)); id != "" {
-			return string(file.Agent) + "\x00" +
-				discoveredFileIDPrefix(file) + "\x00" + id
+			return string(file.Agent) + "\x00" + id
 		}
 	}
 	return string(file.Agent) + "\x00" + file.Path
-}
-
-func discoveredFileIDPrefix(file parser.DiscoveredFile) string {
-	if isS3SourcePath(file.Path) {
-		return s3SessionIDPrefix(file.Machine)
-	}
-	return ""
 }
 
 func preferDiscoveredFile(
@@ -2992,59 +2903,23 @@ func (e *Engine) ResyncAll(
 func (e *Engine) resyncAllLocked(
 	ctx context.Context, onProgress ProgressFunc,
 ) (stats SyncStats) {
-	stats, _ = e.resyncAllWithOptionsLocked(
-		ctx, onProgress, RebuildOptions{}, productionRebuildOperations,
+	stats, _ = e.resyncAllWithOperationsLocked(
+		ctx, onProgress, productionRebuildOperations,
 	)
-	// Preserve the legacy result shape; phase diagnostics are part of the
-	// options entrypoint's observable contract only.
-	stats.RebuildPhases = nil
 	e.mu.Lock()
 	e.lastSyncStats = stats
 	e.mu.Unlock()
 	return stats
 }
 
-// ResyncAllWithOptions atomically rebuilds the archive from the local sources
-// plus each configured contributor.
-func (e *Engine) ResyncAllWithOptions(
-	ctx context.Context, onProgress ProgressFunc, opts RebuildOptions,
-) (stats SyncStats, err error) {
-	return e.resyncAllWithOptionsAndOperations(
-		ctx, onProgress, opts, productionRebuildOperations,
-	)
-}
-
-func (e *Engine) resyncAllWithOptionsAndOperations(
-	ctx context.Context, onProgress ProgressFunc, opts RebuildOptions,
-	ops rebuildOperations,
-) (stats SyncStats, err error) {
-	if e.refuseWriteInForceParse("ResyncAllWithOptions") {
-		return SyncStats{}, nil
-	}
-	e.syncMu.Lock()
-	defer e.notifyStartupReconciled()
-	defer func() {
-		if stats.shouldEmitSync() {
-			e.emit("sync")
-		}
-	}()
-	defer e.syncMu.Unlock()
-	defer e.clearCurrentProgress()
-	defer func() { e.recordStartupReconciled(ctx, stats, err) }()
-	opts.includePhaseDiagnostics = true
-	return e.resyncAllWithOptionsLocked(
-		ctx, onProgress, opts, ops,
-	)
-}
-
-// resyncAllWithOptionsLocked rebuilds the archive in place: it builds a fresh
+// resyncAllWithOperationsLocked rebuilds the archive in place: it builds a fresh
 // replacement at the temp path, swaps it into the live file, then re-baselines
 // the caches that referenced the old database. The caller holds syncMu. The
 // extracted methods (ResyncBuild, SwapResyncDatabase, ResetCachesAfterSwap) let
 // the daemon run the heavy build in a worker process behind a write barrier and
 // perform only the swap tail itself.
-func (e *Engine) resyncAllWithOptionsLocked(
-	ctx context.Context, onProgress ProgressFunc, opts RebuildOptions,
+func (e *Engine) resyncAllWithOperationsLocked(
+	ctx context.Context, onProgress ProgressFunc,
 	ops rebuildOperations,
 ) (stats SyncStats, retErr error) {
 	if err := ctx.Err(); err != nil {
@@ -3064,7 +2939,7 @@ func (e *Engine) resyncAllWithOptionsLocked(
 	// The barrier rejects such writes with ErrWriterClosed instead. The worker
 	// arm holds this barrier at the daemon layer (runWorkerResyncBuild) and calls
 	// ResyncBuild directly, so it never reaches this method; this arm covers the
-	// in-process fallback, CLI --full, worker startup, and unified rebuilds. Only
+	// in-process fallback, CLI --full, worker startup. Only
 	// engage it when this call owns the barrier, so an outer owner is not
 	// double-closed or prematurely reopened.
 	ownedBarrier := false
@@ -3148,7 +3023,7 @@ func (e *Engine) resyncAllWithOptionsLocked(
 		}
 	}()
 
-	stats, err := e.resyncBuildLocked(ctx, onProgress, opts, ops, ownedBarrier)
+	stats, err := e.resyncBuildLocked(ctx, onProgress, ops)
 	if err != nil || stats.Aborted {
 		return stats, err
 	}
@@ -3182,14 +3057,14 @@ func (e *Engine) resyncAllWithOptionsLocked(
 }
 
 // resyncBuildLocked builds a complete replacement archive at the temp path from
-// the current sources plus any contributors, copies preserved state (orphans,
+// the local sources, copies preserved state (orphans,
 // insights, recall, user metadata) from the original, persists the fresh skip
 // cache into the replacement, and closes it. It reads the original but never
 // closes or swaps it; the caller performs the swap. The caller holds syncMu and
 // guarantees the original receives no writes for the duration.
 func (e *Engine) resyncBuildLocked(
-	ctx context.Context, onProgress ProgressFunc, opts RebuildOptions,
-	ops rebuildOperations, restoreActiveWriterOnAbort bool,
+	ctx context.Context, onProgress ProgressFunc,
+	ops rebuildOperations,
 ) (stats SyncStats, retErr error) {
 	if e.sourceSyncErr != nil && (!errors.Is(e.sourceSyncErr, db.ErrArchiveOnly) || len(opts.Contributors) > 0) {
 		return SyncStats{Aborted: true}, e.sourceSyncErr
@@ -3238,78 +3113,11 @@ func (e *Engine) resyncBuildLocked(
 	// between storage and SQLite sources across resyncs. Fail closed:
 	// if we can't query, assume old DB has file-backed data
 	// worth protecting.
-	oldFileSessions, err := e.protectedFileSessionCount(ctx, origDB, "", "", false)
+	oldFileSessions, err := e.protectedFileSessionCount(ctx, origDB)
 	if err != nil {
 		log.Printf("resync: get old file count: %v", err)
 		oldFileSessions = 1
 	}
-	localOldFileSessions := oldFileSessions
-	rebuildOldFileSessions := oldFileSessions
-	contributorOldFileSessions := make([]int, len(opts.Contributors))
-	if len(opts.Contributors) > 0 ||
-		len(opts.UnavailableContributorIDPrefixes) > 0 {
-		contributorPrefixes := slices.Clone(
-			opts.UnavailableContributorIDPrefixes,
-		)
-		contributorPrefixes = slices.Grow(
-			contributorPrefixes, len(opts.Contributors),
-		)
-		for _, contributor := range opts.Contributors {
-			if contributor.Config.IDPrefix != "" {
-				contributorPrefixes = append(
-					contributorPrefixes, contributor.Config.IDPrefix,
-				)
-			}
-		}
-		disabledStorage := storageAgentsForDisabledProviders(e.sources().preserveAgents)
-		// A disabled ICodeMate provider discovers nothing, so its CLI JSONL
-		// rows are preserved rather than rediscovered and must leave the
-		// protected count with the container rows.
-		excludedAgents := []db.RebuildAgentExclusion{
-			{Agent: string(parser.AgentOpenCode)},
-			{Agent: string(parser.AgentKilo)},
-			{Agent: string(parser.AgentMiMoCode)},
-			{
-				Agent: string(parser.AgentIcodemate),
-				KeepJSONLRows: !slices.Contains(
-					disabledStorage, parser.AgentIcodemate,
-				),
-			},
-		}
-		for _, agent := range disabledStorage {
-			excludedAgents = append(
-				excludedAgents, db.RebuildAgentExclusion{Agent: string(agent)},
-			)
-		}
-		localOldFileSessions, err = origDB.FileBackedSessionCountForRebuildOwner(
-			context.Background(), e.machine, contributorPrefixes, excludedAgents,
-		)
-		if err != nil {
-			log.Printf("resync: get old local rebuild file count: %v", err)
-			localOldFileSessions = 1
-		}
-		for i, contributor := range opts.Contributors {
-			count, countErr := protectedFileSessionCount(ctx,
-				origDB, contributor.Config.Machine,
-				contributor.Config.IDPrefix,
-				contributor.Config.Machine != "",
-				contributor.Config.DisabledAgents,
-			)
-			if countErr != nil {
-				log.Printf(
-					"resync: get old contributor %q file count: %v",
-					contributor.Name, countErr,
-				)
-				count = 1
-			}
-			contributorOldFileSessions[i] = count
-		}
-		rebuildOldFileSessions = localOldFileSessions
-		for _, count := range contributorOldFileSessions {
-			rebuildOldFileSessions += count
-		}
-	}
-
 	// Clean up stale temp DB from a prior crash.
 	removeTempDB(tempPath)
 
@@ -3469,7 +3277,7 @@ func (e *Engine) resyncBuildLocked(
 	// its source ownership serves every parsed file. Querying the archive
 	// per file would open cold reader connections while workers are busy,
 	// which SQLite's busy handler turns into sleeps on every open.
-	archiveIndex, err := loadArchiveRebuildIndex(ctx, origDB, e.collisionPolicyAgents(opts.Contributors))
+	archiveIndex, err := loadArchiveRebuildIndex(ctx, origDB, e.collisionPolicyAgents())
 	if err != nil {
 		log.Printf("resync: snapshot archive source ownership: %v", err)
 		newDB.Close()
@@ -3511,12 +3319,7 @@ func (e *Engine) resyncBuildLocked(
 	pendingLinksUpdated += stats.LinksUpdated
 	stats.LinksUpdated = 0
 	e.phaseStats.Log("resync")
-	if opts.includePhaseDiagnostics {
-		stats.RebuildPhases = append(stats.RebuildPhases,
-			phaseSnapshot("local", &e.phaseStats))
-	}
-	localStats := stats
-	if localStats.Deferred > 0 || stats.Aborted || ctx.Err() != nil {
+	if stats.Deferred > 0 || stats.Aborted || ctx.Err() != nil {
 		newDB.Close()
 		removeTempDB(tempPath)
 		restoreSkipCache()
@@ -4294,7 +4097,7 @@ func (e *Engine) ResyncBuild(
 	defer e.syncMu.Unlock()
 	defer e.clearCurrentProgress()
 	stats, err := e.resyncBuildLocked(
-		ctx, onProgress, RebuildOptions{}, productionRebuildOperations, false,
+		ctx, onProgress, productionRebuildOperations,
 	)
 	return e.ResyncTempPath(), stats, err
 }
@@ -4346,13 +4149,12 @@ func (e *Engine) ReloadSkipCache(ctx context.Context) error {
 			return fmt.Errorf("reloading failure cache: %w", err)
 		}
 	}
-	skipHashKeys, _ := normalizeSourceHashSkipCache(skipCache, nil)
+	skipHashKeys, _ := normalizeSourceHashSkipCache(skipCache)
 
 	e.skipMu.Lock()
 	e.skipCache = skipCache
 	e.skipCacheDirty = true
 	e.skipHashKeys = skipHashKeys
-	e.skipFingerprints = make(map[string]string)
 	e.skipMu.Unlock()
 	return nil
 }
@@ -4378,18 +4180,9 @@ func removeWAL(path string) {
 }
 
 func countRootSessionsForAgent(ctx context.Context,
-	database *db.DB, agent parser.AgentType, machine, idPrefix string, scoped bool,
+	database *db.DB, agent parser.AgentType,
 ) int {
-	machinePredicate := ""
 	args := []any{string(agent)}
-	if scoped {
-		machinePredicate = " AND machine = ?"
-		args = append(args, machine)
-	}
-	if idPrefix != "" {
-		machinePredicate += " AND substr(id, 1, length(?)) = ?"
-		args = append(args, idPrefix, idPrefix)
-	}
 	var count int
 	err := database.Reader().QueryRow(ctx, `
 		SELECT COUNT(*) FROM sessions
@@ -4397,7 +4190,7 @@ func countRootSessionsForAgent(ctx context.Context,
 		  AND message_count > 0
 		  AND relationship_type NOT IN ('subagent', 'fork')
 		  AND deleted_at IS NULL
-	`+machinePredicate, args...).Scan(&count)
+	`, args...).Scan(&count)
 	if err != nil {
 		log.Printf("count root %s sessions: %v", agent, err)
 	}
@@ -4405,18 +4198,9 @@ func countRootSessionsForAgent(ctx context.Context,
 }
 
 func countIcodemateContainerRootSessions(ctx context.Context,
-	database *db.DB, machine, idPrefix string, scoped bool,
+	database *db.DB,
 ) int {
-	machinePredicate := ""
 	args := []any{string(parser.AgentIcodemate)}
-	if scoped {
-		machinePredicate = " AND machine = ?"
-		args = append(args, machine)
-	}
-	if idPrefix != "" {
-		machinePredicate += " AND substr(id, 1, length(?)) = ?"
-		args = append(args, idPrefix, idPrefix)
-	}
 	var count int
 	err := database.Reader().QueryRow(ctx, `
 		SELECT COUNT(*) FROM sessions
@@ -4425,7 +4209,7 @@ func countIcodemateContainerRootSessions(ctx context.Context,
 		  AND message_count > 0
 		  AND relationship_type NOT IN ('subagent', 'fork')
 		  AND deleted_at IS NULL
-	`+machinePredicate, args...).Scan(&count)
+	`, args...).Scan(&count)
 	if err != nil {
 		log.Printf("count root ICodeMate container sessions: %v", err)
 	}
@@ -4445,32 +4229,18 @@ func storageAgentsForDisabledProviders(
 }
 
 func (e *Engine) protectedFileSessionCount(ctx context.Context,
-	database *db.DB, machine, idPrefix string, scoped bool,
+	database *db.DB,
 ) (int, error) {
 	return protectedFileSessionCount(ctx,
-		database, machine, idPrefix, scoped, e.sources().preserveAgents,
+		database, e.sources().preserveAgents,
 	)
 }
 
 func protectedFileSessionCount(ctx context.Context,
-	database *db.DB, machine, idPrefix string, scoped bool,
+	database *db.DB,
 	preserveAgents []parser.AgentType,
 ) (int, error) {
-	var count int
-	var err error
-	if scoped {
-		if idPrefix != "" {
-			count, err = database.FileBackedSessionCountForSource(
-				ctx, machine, idPrefix,
-			)
-		} else {
-			count, err = database.FileBackedSessionCountForMachine(
-				ctx, machine,
-			)
-		}
-	} else {
-		count, err = database.FileBackedSessionCount(ctx)
-	}
+	count, err := database.FileBackedSessionCount(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -4480,7 +4250,7 @@ func protectedFileSessionCount(ctx context.Context,
 		parser.AgentMiMoCode,
 	} {
 		count -= countRootSessionsForAgent(ctx,
-			database, agent, machine, idPrefix, scoped,
+			database, agent,
 		)
 	}
 	storageAgents := storageAgentsForDisabledProviders(preserveAgents)
@@ -4489,11 +4259,11 @@ func protectedFileSessionCount(ctx context.Context,
 		// rows are preserved rather than rediscovered: subtract every
 		// ICodeMate row, not just the self-preserving container layouts.
 		count -= countRootSessionsForAgent(ctx,
-			database, parser.AgentIcodemate, machine, idPrefix, scoped,
+			database, parser.AgentIcodemate,
 		)
 	} else {
 		count -= countIcodemateContainerRootSessions(ctx,
-			database, machine, idPrefix, scoped,
+			database,
 		)
 	}
 	seenPreserved := make(map[parser.AgentType]struct{}, len(storageAgents))
@@ -4512,7 +4282,7 @@ func protectedFileSessionCount(ctx context.Context,
 			continue
 		}
 		count -= countRootSessionsForAgent(ctx,
-			database, agent, machine, idPrefix, scoped,
+			database, agent,
 		)
 	}
 	if count < 0 {
@@ -4626,139 +4396,6 @@ func (e *Engine) syncThenRunLocked(
 	e.signalSched.flushAllInline()
 	e.clearCurrentProgress()
 	if err := work(full || didResync); err != nil {
-		return stats, err
-	}
-	return stats, nil
-}
-
-// RebuildCleanup owns resources prepared for a multi-source rebuild. Close
-// may be retried when it fails so callers can retain mirror locks and temporary
-// roots instead of silently losing cleanup ownership.
-type RebuildCleanup interface {
-	Close() error
-}
-
-// RebuildCommitter finalizes durable source state only after the replacement
-// archive has been installed successfully.
-type RebuildCommitter interface {
-	Commit() error
-}
-
-type rebuildCleanupError struct {
-	owner RebuildCleanup
-	err   error
-}
-
-func (e *rebuildCleanupError) Error() string { return e.err.Error() }
-func (e *rebuildCleanupError) Unwrap() error { return e.err }
-func (e *rebuildCleanupError) RetryCleanup() error {
-	return e.owner.Close()
-}
-
-// SyncThenRunWithRebuild coordinates local sync, optional contributor
-// preparation, an atomic multi-source rebuild, and post-rebuild work under the
-// engine's exclusive sync lock. Preparation only runs when a rebuild is
-// required. rebuildDone runs after a rebuild attempt completes and before
-// post-rebuild work begins. Work never runs after a failed or aborted rebuild.
-func (e *Engine) SyncThenRunWithRebuild(
-	ctx context.Context,
-	full bool,
-	onProgress ProgressFunc,
-	prepare func() (RebuildOptions, RebuildCleanup, error),
-	rebuildDone func(SyncStats, error),
-	work func(forceFull, rebuilt bool) error,
-) (stats SyncStats, retErr error) {
-	if e.sourceSyncErr != nil {
-		return SyncStats{Aborted: true}, e.sourceSyncErr
-	}
-	if e.refuseWriteInForceParse("SyncThenRunWithRebuild") {
-		return SyncStats{}, nil
-	}
-	e.lockSyncWithProgress(onProgress)
-	defer e.notifyStartupReconciled()
-	defer func() {
-		if stats.shouldEmitSync() {
-			e.emit("sync")
-		}
-	}()
-	defer e.syncMu.Unlock()
-	defer func() {
-		if retErr == nil && stats.Deferred == 0 {
-			// Match SyncThenRun: successful foreground coordination unblocks
-			// startup backfills while syncMu is still held.
-			e.ReleaseStartupMaintenance()
-		}
-	}()
-	defer e.clearCurrentProgress()
-	defer func() { e.recordStartupReconciled(ctx, stats, retErr) }()
-
-	didResync := full || e.db.NeedsResync()
-	if didResync {
-		opts, cleanup, err := prepare()
-		if cleanup != nil {
-			defer func() {
-				if err := cleanup.Close(); err != nil {
-					retErr = errors.Join(retErr, &rebuildCleanupError{
-						owner: cleanup,
-						err:   err,
-					})
-				}
-			}()
-		}
-		if err != nil {
-			if rebuildDone != nil {
-				rebuildDone(SyncStats{}, err)
-			}
-			return SyncStats{}, err
-		}
-		opts.includePhaseDiagnostics = true
-		stats, err = e.resyncAllWithOptionsLocked(
-			ctx, onProgress, opts, productionRebuildOperations,
-		)
-		if err != nil {
-			if rebuildDone != nil {
-				rebuildDone(stats, err)
-			}
-			return stats, err
-		}
-		if stats.Aborted {
-			if rebuildDone != nil {
-				rebuildDone(stats, nil)
-			}
-			return stats, nil
-		}
-		if err := ctx.Err(); err != nil {
-			if rebuildDone != nil {
-				rebuildDone(stats, err)
-			}
-			return stats, err
-		}
-		if committer, ok := cleanup.(RebuildCommitter); ok {
-			if err := committer.Commit(); err != nil {
-				if rebuildDone != nil {
-					rebuildDone(stats, err)
-				}
-				return stats, err
-			}
-		}
-		if rebuildDone != nil {
-			rebuildDone(stats, nil)
-		}
-	} else {
-		stats = e.syncAllLocked(
-			ctx, onProgress, time.Time{}, nil,
-			syncWriteDefault, true, false,
-		)
-	}
-	if err := ctx.Err(); err != nil {
-		return stats, err
-	}
-	if !stats.ProcessingComplete() {
-		return stats, nil
-	}
-	e.signalSched.flushAllInline()
-	e.clearCurrentProgress()
-	if err := work(full || didResync, didResync); err != nil {
 		return stats, err
 	}
 	return stats, nil
@@ -5227,7 +4864,7 @@ func runSessionAnnotationWrite[T any](
 func (e *Engine) SyncAll(
 	ctx context.Context, onProgress ProgressFunc,
 ) (stats SyncStats) {
-	return e.syncAll(ctx, onProgress, false, false)
+	return e.syncAll(ctx, onProgress, false)
 }
 
 // SyncAllForceParse discovers all session files and forces each source through
@@ -5235,34 +4872,20 @@ func (e *Engine) SyncAll(
 func (e *Engine) SyncAllForceParse(
 	ctx context.Context, onProgress ProgressFunc,
 ) (stats SyncStats) {
-	return e.syncAll(ctx, onProgress, true, false)
-}
-
-// SyncAllForceParseAfterCache requires a complete parse for each source that
-// does not have a durable skip-cache entry. It is the replay form of a remote
-// full import: sources not reached by an interrupted attempt still parse in
-// full, while deterministic failures already recorded by that attempt remain
-// suppressed.
-func (e *Engine) SyncAllForceParseAfterCache(
-	ctx context.Context, onProgress ProgressFunc,
-) (stats SyncStats) {
-	return e.syncAll(ctx, onProgress, true, true)
+	return e.syncAll(ctx, onProgress, true)
 }
 
 func (e *Engine) syncAll(
 	ctx context.Context,
 	onProgress ProgressFunc,
 	forceFullParse bool,
-	allowCachedFailures bool,
 ) (stats SyncStats) {
 	if e.refuseWriteInForceParse("SyncAll") {
 		return SyncStats{}
 	}
 	e.syncMu.Lock()
 	previousForceFullParse := e.forceFullParse
-	previousForceFullParseAllowsCache := e.forceFullParseAllowsCache
 	e.forceFullParse = forceFullParse
-	e.forceFullParseAllowsCache = allowCachedFailures
 	defer e.notifyStartupReconciled()
 	// Defers run LIFO: Unlock runs before the emit closure so
 	// Emitter implementations cannot widen the syncMu critical
@@ -5275,13 +4898,12 @@ func (e *Engine) syncAll(
 	defer e.syncMu.Unlock()
 	defer func() {
 		e.forceFullParse = previousForceFullParse
-		e.forceFullParseAllowsCache = previousForceFullParseAllowsCache
 	}()
 	defer e.clearCurrentProgress()
 	defer func() { e.recordStartupReconciled(ctx, stats, ctx.Err()) }()
 	stats = e.syncAllLocked(
 		ctx, onProgress, time.Time{}, nil, syncWriteDefault, true,
-		forceFullParse && !allowCachedFailures,
+		forceFullParse,
 	)
 	return
 }
@@ -5491,8 +5113,8 @@ func (e *Engine) reconcileScopedWatchRootsLocked(
 		Detail: "Reconciling watched session roots",
 	})
 	fullCoverage := full || (agent == "" && len(roots) == 0)
-	plans, excludedRemoteRoots := e.resolveReconciliationPlans(
-		ctx, agent, roots, full, fullCoverage,
+	plans := e.resolveReconciliationPlans(
+		ctx, agent, roots, fullCoverage,
 	)
 	if !fullCoverage && !reconciliationPlansNeedPass(plans) {
 		// No provider resolved any scope for the request: every root was
@@ -5501,14 +5123,12 @@ func (e *Engine) reconcileScopedWatchRootsLocked(
 		// remote-root accounting.
 		e.setLastReconciliationResult(ReconciliationResult{
 			Complete: true,
-			Metrics:  ReconciliationMetrics{ExcludedRemoteRoots: excludedRemoteRoots},
 		})
 		return SyncStats{}, 0, passEpilogueEligibility{}, nil
 	}
 	stats, metrics, tombstoned, eligibility, err := e.reconcileWatchRootsStreamedLocked(
 		ctx, plans, fullCoverage, force, onProgress,
 	)
-	metrics.ExcludedRemoteRoots = excludedRemoteRoots
 	complete := err == nil && ctx.Err() == nil && !stats.Aborted &&
 		stats.ProcessingComplete()
 	if err == nil && !complete {
@@ -5570,8 +5190,8 @@ func (e *Engine) resolveReconciliationPlans(
 	ctx context.Context,
 	agentFilter parser.AgentType,
 	roots []string,
-	full, fullCoverage bool,
-) ([]providerReconciliationPlan, int) {
+	fullCoverage bool,
+) []providerReconciliationPlan {
 	agents := make([]parser.AgentType, 0, len(e.sources().providerFactories))
 	for agent := range e.sources().providerFactories {
 		agents = append(agents, agent)
@@ -5603,7 +5223,7 @@ func (e *Engine) resolveReconciliationPlans(
 		}
 		filtered := make([]string, 0, len(requestRoots))
 		for _, root := range requestRoots {
-			if strings.TrimSpace(root) == "" || isRemoteReconciliationRoot(root) {
+			if strings.TrimSpace(root) == "" {
 				continue
 			}
 			filtered = append(filtered, root)
@@ -5614,7 +5234,6 @@ func (e *Engine) resolveReconciliationPlans(
 		provider := factory.NewProvider(parser.ProviderConfig{
 			Roots: e.sources().agentDirs[agent], Machine: e.machine,
 			SourceMachines: e.sources().sourceMachines[agent],
-			PathRewriter:   e.pathRewriter,
 		})
 		plan, err := provider.ResolveReconciliationScopes(
 			ctx, parser.ReconciliationScopeRequest{Roots: filtered},
@@ -5623,39 +5242,7 @@ func (e *Engine) resolveReconciliationPlans(
 			agent: agent, plan: plan, requestRoots: filtered, err: err,
 		})
 	}
-	return plans, e.excludedRemoteReconciliationRoots(agentFilter, roots, full)
-}
-
-// excludedRemoteReconciliationRoots preserves the historical ExcludedRemoteRoots
-// semantics: agent-scoped requests count every remote occurrence, unscoped
-// partial requests count unique remote roots, and a full recovery counts
-// unique remote configured roots.
-func (e *Engine) excludedRemoteReconciliationRoots(
-	agentFilter parser.AgentType, roots []string, full bool,
-) int {
-	if agentFilter != "" {
-		remote := 0
-		for _, root := range roots {
-			if isRemoteReconciliationRoot(root) {
-				remote++
-			}
-		}
-		return remote
-	}
-	requested := roots
-	if full {
-		requested = nil
-		for _, dirs := range e.sources().agentDirs {
-			requested = append(requested, dirs...)
-		}
-	}
-	remote := make(map[string]struct{})
-	for _, root := range requested {
-		if isRemoteReconciliationRoot(root) {
-			remote[root] = struct{}{}
-		}
-	}
-	return len(remote)
+	return plans
 }
 
 // reconciliationPlansNeedPass reports whether any provider resolved a scope
@@ -5776,7 +5363,7 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 		}
 	}
 	var verifiedPass uint64
-	if fullCoverage && e.pathRewriter == nil {
+	if fullCoverage {
 		verifiedPass = e.beginVerifiedSourcePass()
 		defer func() {
 			e.finishVerifiedSourcePass(
@@ -6366,7 +5953,7 @@ func (e *Engine) streamReconciliationCandidates(
 			traversalRoots = append([]string(nil), e.sources().agentDirs[agent]...)
 		}
 		provider := factory.NewProvider(parser.ProviderConfig{
-			Roots: traversalRoots, Machine: e.machine, PathRewriter: e.pathRewriter,
+			Roots: traversalRoots, Machine: e.machine,
 			SourceMachines:                    e.sources().sourceMachines[agent],
 			SQLiteContainerListsWatermarkOnly: containerListsWatermarkOnly,
 		})
@@ -6400,8 +5987,8 @@ func (e *Engine) streamReconciliationCandidates(
 			}
 			scopeProvider := factory.NewProvider(parser.ProviderConfig{
 				Roots: discoveryRoots, Machine: e.machine,
-				SourceMachines:                    e.sources().sourceMachines[agent],
-				PathRewriter:                      e.pathRewriter,
+				SourceMachines: e.sources().sourceMachines[agent],
+
 				SQLiteContainerListsWatermarkOnly: containerListsWatermarkOnly,
 			})
 			discoverer, ok := scopeProvider.(parser.StreamingDiscoverer)
@@ -6662,7 +6249,7 @@ func (e *Engine) reconciliationCandidate(ctx context.Context,
 	watchRoots []parser.WatchRoot,
 ) (reconciliationCandidate, bool) {
 	path := providerDiscoveredPath(source)
-	if path == "" || isRemoteReconciliationRoot(path) {
+	if path == "" {
 		return reconciliationCandidate{}, false
 	}
 	agent := source.Provider
@@ -6696,9 +6283,7 @@ func (e *Engine) reconciliationCandidate(ctx context.Context,
 					agent, transcriptSize, transcriptMtime,
 				)
 			}
-			fullID := applyIDPrefixToID(
-				e.idPrefix, claudeFormatArchiveSessionID(agent, identity),
-			)
+			fullID := claudeFormatArchiveSessionID(agent, identity)
 			storedPath := e.db.GetSessionFilePath(ctx, fullID)
 			if agent == parser.AgentIcodemate {
 				preferredAgainstStored := storedPath != "" &&
@@ -7306,7 +6891,7 @@ func (e *Engine) tombstoneMissingWatchSourcesLocked(
 	roots []string,
 	spool reconciliationSpoolStore,
 ) (deleted int, retErr error) {
-	plans, _ := e.resolveReconciliationPlans(ctx, "", roots, false, false)
+	plans := e.resolveReconciliationPlans(ctx, "", roots, false)
 	var scopes []reconciliationProviderScope
 	for _, plan := range plans {
 		if plan.err != nil {
@@ -7320,7 +6905,6 @@ func (e *Engine) tombstoneMissingWatchSourcesLocked(
 				Roots:          e.sources().agentDirs[plan.agent],
 				Machine:        e.machine,
 				SourceMachines: e.sources().sourceMachines[plan.agent],
-				PathRewriter:   e.pathRewriter,
 			})
 		}
 		for _, scope := range plan.plan.Scopes {
@@ -7404,12 +6988,7 @@ func (e *Engine) tombstoneMissingWatchSourceScopesLocked(
 	scopes []reconciliationProviderScope,
 	spool reconciliationSpoolStore,
 ) (deleted int, retErr error) {
-	if e.pathRewriter != nil {
-		// Remote imports rewrite extraction paths to canonical stored paths in
-		// one direction only. Without a stored-to-local inverse, stat and
-		// provider lookup cannot authoritatively prove source loss.
-		return 0, nil
-	}
+
 	var agents []parser.AgentType
 	scopesByAgent := make(map[parser.AgentType][]reconciliationProviderScope)
 	for _, scope := range scopes {
@@ -7443,7 +7022,6 @@ func (e *Engine) tombstoneMissingWatchSourceScopesLocked(
 			provider = factory.NewProvider(parser.ProviderConfig{
 				Roots: e.sources().agentDirs[agent], Machine: e.machine,
 				SourceMachines: e.sources().sourceMachines[agent],
-				PathRewriter:   e.pathRewriter,
 			})
 		}
 		if provider != nil &&
@@ -8081,10 +7659,6 @@ func (e *Engine) lstatSource(path string) (os.FileInfo, error) {
 	return os.Lstat(path)
 }
 
-func isRemoteReconciliationRoot(root string) bool {
-	return strings.HasPrefix(strings.ToLower(root), "s3://")
-}
-
 // SyncAllSince syncs only files whose mtime is at or after
 // the given cutoff time. Use a zero time to sync everything
 // (equivalent to SyncAll). The cutoff is applied after
@@ -8247,7 +7821,6 @@ func (e *Engine) syncAllLocked(
 		e.recordSyncStarted(ctx)
 	}
 	e.phaseStats.Reset()
-	e.resetS3CodexIndexCache()
 	e.resetSourceClaims()
 	e.anomalies.reset()
 	// Fold the per-run anomaly accumulator into the returned stats on
@@ -8295,7 +7868,7 @@ func (e *Engine) syncAllLocked(
 
 	verifiedPass := uint64(0)
 	verifiedPassFinished := false
-	if scope == nil && e.pathRewriter == nil {
+	if scope == nil {
 		verifiedPass = e.beginVerifiedSourcePass()
 		e.markVerifiedDiscoveredSources(providerFound)
 		defer func() {
@@ -8642,10 +8215,10 @@ func (e *Engine) discoverProviderSources(
 			providerRoots = roots
 		}
 		provider := factory.NewProvider(parser.ProviderConfig{
-			Roots:                             providerRoots,
-			Machine:                           e.machine,
-			SourceMachines:                    e.sources().sourceMachines[agentType],
-			PathRewriter:                      e.pathRewriter,
+			Roots:          providerRoots,
+			Machine:        e.machine,
+			SourceMachines: e.sources().sourceMachines[agentType],
+
 			SQLiteContainerListsWatermarkOnly: containerListsWatermarkOnly,
 		})
 		// Shared-database providers are streamed source-by-source by their
@@ -8709,33 +8282,11 @@ func (e *Engine) discoverProviderSources(
 				ProviderSource:  &sourceCopy,
 				ProviderProcess: true,
 			}
-			if !isS3SourcePath(sourcePath) {
-				discovered.Machine = e.machineForProviderSource(
-					agent, source, sourcePath,
-				)
-			}
+			discovered.Machine = e.machineForProviderSource(
+				agent, source, sourcePath,
+			)
 			if forceParseSource(sourcePath) {
 				discovered.ForceParse = true
-			}
-			// S3-aware source sets carry the durable object metadata in the
-			// Opaque payload. Thread it into the DiscoveredFile so the S3 sync
-			// path (object fetch, fingerprinting, machine-ID namespacing) and the
-			// freshness/dedup/mtime-cutoff logic see the same source identity the
-			// legacy s3:// discovery emitted directly. Providers read local files,
-			// so clear ProviderProcess for s3:// objects: processProviderFile must
-			// decline them so they route through processS3Session rather than the
-			// provider Fingerprint/Parse path, which cannot read a remote object.
-			if s3, ok := source.Opaque.(parser.S3DiscoveredSource); ok {
-				discovered.Machine = s3.Machine
-				discovered.SourceSize = s3.Size
-				discovered.SourceMtime = s3.MtimeNS
-				discovered.SourceFingerprint = s3.Fingerprint
-				discovered.TranscriptSize = s3.TranscriptSize
-				discovered.TranscriptMtime = s3.TranscriptMtimeNS
-				discovered.ProviderProcess = false
-				if discovered.Project == "" {
-					discovered.Project = s3.Project
-				}
 			}
 			files = append(files, discovered)
 		}
@@ -9087,21 +8638,13 @@ func (e *Engine) filterFilesByMtime(
 			e.staleSourceReparseAdmitted(
 				sourceCwdParticipating, sourceCwd,
 			) {
-			// Parser upgrades and cwd reconciliation must bypass the cutoff,
-			// including unchanged S3 objects with stale archived output.
-			out = append(out, f)
-			continue
-		}
-		if isS3SourcePath(f.Path) && e.s3SourceMetadataChanged(ctx, f) {
+			// Parser upgrades and cwd reconciliation must bypass the cutoff.
 			out = append(out, f)
 			continue
 		}
 		if usesCompositeSidecarFreshness(f.Agent, f.Path) {
 			rawSessionID := claudeSessionIDFromPath(f.Path)
-			sessionID := applyIDPrefixToID(
-				e.idPrefix,
-				claudeFormatArchiveSessionID(f.Agent, rawSessionID),
-			)
+			sessionID := claudeFormatArchiveSessionID(f.Agent, rawSessionID)
 			if e.icodemateCLIDeletedCompanionMtime(ctx,
 				sessionID, f.Path, mtime,
 			) >= cutoffNs {
@@ -9112,16 +8655,7 @@ func (e *Engine) filterFilesByMtime(
 		if f.Agent != parser.AgentCodex {
 			continue
 		}
-		var indexNeedsRefresh bool
-		if isS3SourcePath(f.Path) {
-			indexNeedsRefresh = e.s3CodexIndexNeedsRefreshSince(
-				f, cutoffNs,
-			)
-		} else {
-			indexNeedsRefresh = e.codexIndexNeedsRefreshSince(ctx,
-				f.Path, cutoffNs,
-			)
-		}
+		indexNeedsRefresh := e.codexIndexNeedsRefreshSince(ctx, f.Path, cutoffNs)
 		if !indexNeedsRefresh {
 			continue
 		}
@@ -9243,15 +8777,6 @@ func (e *Engine) discoveredFileEffectiveMtime(
 	// Codex-format forks take the same branch: their fingerprint carries no
 	// index component, so the raw mtime is the same value at lower cost.
 	if isCodexFormatAgent(file.Agent) {
-		return discoveredFileMtime(ctx, file)
-	}
-	// S3 objects are discovered through the provider facade (so they carry a
-	// ProviderSource), but providers read local files and cannot Fingerprint an
-	// s3:// URI. Routing them through providerSourceMtime below would error, and
-	// filterFilesByMtime keeps any file whose mtime cannot be resolved, defeating
-	// the incremental cutoff and reprocessing every old S3 object on each sync.
-	// The threaded object metadata (or a HEAD stat) gives the timestamp directly.
-	if isS3SourcePath(file.Path) {
 		return discoveredFileMtime(ctx, file)
 	}
 	// Copilot store changes must pass the cutoff even when the transcript is
@@ -9393,9 +8918,7 @@ func (e *Engine) discoveredFileEffectiveMtime(
 func (e *Engine) providerFingerprint(ctx context.Context, provider parser.Provider, source parser.SourceRef) (parser.SourceFingerprint, error) {
 	if reusable, ok := provider.(parser.StoredFingerprintProvider); ok {
 		return reusable.FingerprintWithStored(ctx, source, func(path string) (string, bool) {
-			if e.pathRewriter != nil {
-				path = e.pathRewriter(path)
-			}
+
 			return e.db.GetFileHashByAgentPath(ctx, path, string(provider.Definition().Type))
 		})
 	}
@@ -9421,9 +8944,8 @@ func (e *Engine) providerSourceMtime(
 		)
 	}
 	provider := factory.NewProvider(parser.ProviderConfig{
-		Roots:        e.sources().agentDirs[file.Agent],
-		Machine:      e.machine,
-		PathRewriter: e.pathRewriter,
+		Roots:   e.sources().agentDirs[file.Agent],
+		Machine: e.machine,
 	})
 	fingerprint, err := e.providerFingerprint(ctx, provider, source)
 	if err != nil {
@@ -9438,16 +8960,6 @@ func (e *Engine) providerSourceMtime(
 func discoveredFileMtime(ctx context.Context,
 	file parser.DiscoveredFile,
 ) (int64, error) {
-	if strings.HasPrefix(file.Path, "s3://") {
-		if file.SourceMtime != 0 {
-			return file.SourceMtime, nil
-		}
-		obj, err := statS3SourceObject(file)
-		if err != nil {
-			return 0, err
-		}
-		return obj.LastModified.UnixNano(), nil
-	}
 	if file.Agent == parser.AgentKiro {
 		if _, _, ok := parseKiroSQLiteVirtualPath(file.Path); ok {
 			return parser.KiroSQLiteSourceMtime(ctx, file.Path)
@@ -9599,7 +9111,7 @@ func (e *Engine) dedupeClaudeDiscoveredFiles(ctx context.Context,
 func claudeDiscoveredFileKey(
 	file parser.DiscoveredFile, sessionID string,
 ) string {
-	return string(file.Agent) + "\x00" + discoveredFileIDPrefix(file) + "\x00" + sessionID
+	return string(file.Agent) + "\x00" + sessionID
 }
 
 // isClaudeFormatAgent reports whether an agent stores sessions as Claude
@@ -9664,13 +9176,7 @@ func (e *Engine) pickPreferredClaudeDiscoveredFile(ctx context.Context,
 		return candidates[0]
 	}
 
-	idPrefix := e.idPrefix
-	if isS3SourcePath(candidates[0].Path) {
-		idPrefix = s3SessionIDPrefix(candidates[0].Machine)
-	}
-	fullID := applyIDPrefixToID(
-		idPrefix, claudeFormatArchiveSessionID(candidates[0].Agent, sessionID),
-	)
+	fullID := claudeFormatArchiveSessionID(candidates[0].Agent, sessionID)
 	storedPath := e.db.GetSessionFilePath(ctx, fullID)
 	if storedPath != "" {
 		for _, candidate := range candidates {
@@ -9722,19 +9228,11 @@ func (e *Engine) claudeSourceMatchesStored(ctx context.Context,
 	if storedSize != size || storedMtime != mtime {
 		return false
 	}
-	if file.SourceFingerprint != "" {
-		storedHash, ok := e.db.GetSessionFileHash(ctx, sessionID)
-		if !ok || storedHash != file.SourceFingerprint {
-			return false
-		}
-	}
 	return e.db.GetSessionDataVersion(ctx, sessionID) >= db.CurrentDataVersion()
 }
 
 func (e *Engine) effectiveSourcePath(path string) string {
-	if e.pathRewriter != nil {
-		return e.pathRewriter(path)
-	}
+
 	return path
 }
 
@@ -9804,16 +9302,6 @@ func claudeFormatTranscriptPreference(
 func claudeTranscriptFileSourceInfo(
 	file parser.DiscoveredFile,
 ) (size, mtime int64, ok bool) {
-	if isS3SourcePath(file.Path) {
-		if file.TranscriptMtime != 0 {
-			return file.TranscriptSize, file.TranscriptMtime, true
-		}
-		obj, err := statS3Object(file.Path)
-		if err != nil {
-			return 0, 0, false
-		}
-		return obj.Size, obj.LastModified.UnixNano(), true
-	}
 	info, err := os.Stat(file.Path)
 	if err != nil {
 		return 0, 0, false
@@ -9824,19 +9312,6 @@ func claudeTranscriptFileSourceInfo(
 func claudeFormatFileSourceInfo(
 	file parser.DiscoveredFile,
 ) (size, mtime int64, ok bool) {
-	if isS3SourcePath(file.Path) {
-		if file.SourceMtime != 0 {
-			return file.SourceSize, file.SourceMtime, true
-		}
-		obj, err := statS3SourceObject(parser.DiscoveredFile{
-			Agent: parser.AgentClaude,
-			Path:  file.Path,
-		})
-		if err != nil {
-			return 0, 0, false
-		}
-		return obj.Size, obj.LastModified.UnixNano(), true
-	}
 	if usesCompositeSidecarFreshness(file.Agent, file.Path) {
 		size, mtime, err := parser.ClaudeLayoutCompositeFileInfo(file.Path)
 		return size, mtime, err == nil
@@ -10182,9 +9657,7 @@ func (e *Engine) providerDBBackedSourceFresh(ctx context.Context,
 	if lookupPath == "" {
 		return false
 	}
-	if e.pathRewriter != nil {
-		lookupPath = e.pathRewriter(lookupPath)
-	}
+
 	_, storedMtime, ok := e.db.GetFileInfoByAgentPath(ctx,
 		lookupPath, string(agent),
 	)
@@ -10731,9 +10204,7 @@ func (e *Engine) collectAndBatchWithOptions(
 						if !outcome.written[j] {
 							continue
 						}
-						ids = append(ids, applyIDPrefixToID(
-							e.idPrefix, pending[j].sess.ID,
-						))
+						ids = append(ids, pending[j].sess.ID)
 					}
 					if err := e.db.SetSessionDataVersionsContext(
 						completionCtx, ids, db.CurrentDataVersion(),
@@ -10871,14 +10342,11 @@ func (e *Engine) collectAndBatchWithOptions(
 				e.failures.Record(r.failureCacheKey, r.failureIdentity)
 			}
 			if r.cacheSkip && r.mtime != 0 && !r.noCacheSkip {
-				e.cacheSkip(r.skipCacheKey(), r.mtime, r.sourceFingerprint)
+				e.cacheSkip(r.skipCacheKey(), r.mtime)
 			}
 			log.Printf("sync error: %v", r.err)
 			r.releaseAll()
 			continue
-		}
-		if len(r.excludedSessionIDs) > 0 || len(r.sourceMissingMembers) > 0 {
-			e.markRetryUnsafeSkipSource(r.path)
 		}
 		for range r.providerFailureCount {
 			stats.RecordFailed()
@@ -10941,7 +10409,7 @@ func (e *Engine) collectAndBatchWithOptions(
 		// current spawn edges away. The global linker below can resolve only
 		// children still named by an edge, so carry former children into its
 		// scoped dangling-parent cleanup explicitly.
-		excluded := e.applyIDPrefixToSessionIDs(r.excludedSessionIDs)
+		excluded := r.excludedSessionIDs
 		if !sourceAllowsParserExclusions {
 			excluded = nil
 		}
@@ -10949,7 +10417,6 @@ func (e *Engine) collectAndBatchWithOptions(
 		for _, result := range r.results {
 			resultIDs = append(resultIDs, result.Session.ID)
 		}
-		resultIDs = e.applyIDPrefixToSessionIDs(resultIDs)
 		completionCtx := ctx
 		if !e.discardWritesOnCancel {
 			completionCtx = context.WithoutCancel(ctx)
@@ -11062,14 +10529,13 @@ func (e *Engine) collectAndBatchWithOptions(
 					// a failed baseline rejects it. Every other provider keeps
 					// the immediate rowless cache write.
 					stageNoWriteCache(r, skipCacheWrite{
-						agent:             r.agent,
-						key:               r.skipCacheKey(),
-						mtime:             r.mtime,
-						sourceFingerprint: r.sourceFingerprint,
+						agent: r.agent,
+						key:   r.skipCacheKey(),
+						mtime: r.mtime,
 					})
 				} else {
 					e.cacheSkip(
-						r.skipCacheKey(), r.mtime, r.sourceFingerprint,
+						r.skipCacheKey(), r.mtime,
 					)
 				}
 			}
@@ -11192,7 +10658,7 @@ func (e *Engine) collectAndBatchWithOptions(
 					sourceCwdResolution:     r.sourceCwdResolution,
 					sourceCwdStored:         r.sourceCwdStored,
 					sourceCwdStoredOK:       r.sourceCwdStoredOK,
-					sourceCompletionSkipped: sourceCompletionSkipped[applyIDPrefixToID(e.idPrefix, pr.Session.ID)],
+					sourceCompletionSkipped: sourceCompletionSkipped[pr.Session.ID],
 				}
 				if i == 0 && (atomicDAG || r.providerStatHash != nil) {
 					// Claude-compatible providers can emit several DAG branches
@@ -11238,10 +10704,9 @@ func (e *Engine) collectAndBatchWithOptions(
 			}
 			if r.cacheAfterWrite && !sourceNeedsRetry {
 				pendingCacheWrites = append(pendingCacheWrites, skipCacheWrite{
-					agent:             r.agent,
-					key:               r.skipCacheKey(),
-					mtime:             r.mtime,
-					sourceFingerprint: r.sourceFingerprint,
+					agent: r.agent,
+					key:   r.skipCacheKey(),
+					mtime: r.mtime,
 				})
 			}
 			if len(pending) >= batchSize ||
@@ -11711,10 +11176,6 @@ type processResult struct {
 	// containers have no physical-path session row that can make the next full
 	// sync fresh through the archive database.
 	cacheAfterWrite bool
-	// sourceFingerprint carries S3 object fingerprints into
-	// skip-cache writes so same-mtime object rewrites do not stay
-	// hidden behind a cached parse failure or non-interactive result.
-	sourceFingerprint string
 	// noCacheSkip suppresses skip-cache recording even when cacheSkip is set
 	// for the agent. Read/scan failures and incomplete append boundaries are
 	// transient: a readability fix or completed record may retain the same file
@@ -11829,90 +11290,9 @@ func (e *Engine) processFile(
 	if res, ok := e.processProviderFile(ctx, file); ok {
 		return res
 	}
-
-	// Every registered agent is provider-authoritative, so processProviderFile
-	// owns all local-file processing. The only sources that fall through are
-	// s3:// objects for providers that declare S3Discovery, which bypass the
-	// provider (its source sets read local files) and use the dedicated S3
-	// sync path. Anything else is an unrecognized agent type.
-	if !strings.HasPrefix(file.Path, "s3://") {
-		return processResult{
-			err: fmt.Errorf("unknown agent type: %s", file.Agent),
-		}
+	return processResult{
+		err: fmt.Errorf("unknown agent type: %s", file.Agent),
 	}
-
-	s3Provider, ok := s3ProviderFor(file.Agent)
-	if !ok {
-		return processResult{
-			err: fmt.Errorf("unsupported s3 agent type: %s", file.Agent),
-		}
-	}
-
-	if file.SourceMtime == 0 {
-		obj, err := statS3SourceObjectWithProvider(file, s3Provider)
-		if err != nil {
-			return processResult{
-				err: fmt.Errorf("stat %s: %w", file.Path, err),
-			}
-		}
-		file.SourceSize = obj.Size
-		file.SourceMtime = obj.LastModified.UnixNano()
-		file.SourceFingerprint = obj.Fingerprint
-	}
-	info, err := s3SourceFileInfo(file)
-	if err != nil {
-		return processResult{
-			err: fmt.Errorf("stat %s: %w", file.Path, err),
-		}
-	}
-
-	// Capture mtime once from the initial stat so all downstream cache
-	// operations use a consistent value.
-	mtime := info.ModTime().UnixNano()
-	cacheSkip := e.shouldCacheSkip(file)
-	sourceFingerprint := s3SourceFingerprint(file)
-
-	// Skip files cached from a previous sync whose mtime and source
-	// fingerprint are unchanged.
-	if cacheSkip && !e.forceParseBypassesCache(file) {
-		if e.shouldUseCachedSkip(file, mtime, sourceFingerprint) {
-			if e.pathNeedsCachedSkipBypass(ctx, file.Agent, file.Path) {
-				e.clearSkip(ctx, file.Path)
-			} else {
-				return processResult{
-					skip:       true,
-					mtime:      mtime,
-					cacheSkip:  true,
-					cachedSkip: true,
-				}
-			}
-		}
-	}
-
-	res := e.processS3Session(ctx, file, info, s3Provider)
-	res.cacheSkip = cacheSkip
-	res.mtime = mtime
-	res.sourceFingerprint = sourceFingerprint
-	return res
-}
-
-func (e *Engine) shouldUseCachedSkip(
-	file parser.DiscoveredFile, mtime int64, sourceFingerprint string,
-) bool {
-	e.skipMu.RLock()
-	cachedMtime, cached := e.skipCache[file.Path]
-	cachedFingerprint := ""
-	if e.skipFingerprints != nil {
-		cachedFingerprint = e.skipFingerprints[file.Path]
-	}
-	e.skipMu.RUnlock()
-	if !cached || cachedMtime != mtime {
-		return false
-	}
-	if isS3SourcePath(file.Path) && sourceFingerprint != "" {
-		return cachedFingerprint == sourceFingerprint
-	}
-	return true
 }
 
 func (e *Engine) pathNeedsProjectReparse(ctx context.Context,
@@ -11923,9 +11303,7 @@ func (e *Engine) pathNeedsProjectReparse(ctx context.Context,
 		return false
 	}
 	lookupPath := path
-	if e.pathRewriter != nil {
-		lookupPath = e.pathRewriter(path)
-	}
+
 	project, ok := e.db.GetProjectByAgentPath(ctx, lookupPath, string(agent))
 	return ok && parser.NeedsProjectReparse(project)
 }
@@ -11946,9 +11324,7 @@ func (e *Engine) pathNeedsDataVersionReparse(ctx context.Context,
 		return false
 	}
 	lookupPath := path
-	if e.pathRewriter != nil {
-		lookupPath = e.pathRewriter(path)
-	}
+
 	if _, _, ok := e.db.GetFileInfoByAgentPath(ctx,
 		lookupPath, string(agent),
 	); !ok {
@@ -12008,9 +11384,7 @@ func (e *Engine) pathInStaleIdentitySet(
 	if len(set) == 0 {
 		return false
 	}
-	if e.pathRewriter != nil {
-		path = e.pathRewriter(path)
-	}
+
 	_, stale := set[sourceCwdPathKey{path: path, agent: string(agent)}]
 	return stale
 }
@@ -12024,7 +11398,7 @@ func (e *Engine) sourceFailureCacheIdentity(
 	id := failurecache.Identity{
 		MTimeNS: fingerprint.MTimeNS, Size: fingerprint.Size, Fingerprint: fingerprint.Hash,
 	}
-	if file.Path == "" || file.Agent == "" || strings.HasPrefix(file.Path, "s3://") {
+	if file.Path == "" || file.Agent == "" {
 		return id, false
 	}
 	if physical, _, virtual := parser.ParseVirtualSourcePath(file.Path); virtual {
@@ -12052,7 +11426,7 @@ func (e *Engine) sourceFailureCacheIdentity(
 }
 
 func (e *Engine) sourcePathMissing(file parser.DiscoveredFile) bool {
-	if file.Path == "" || strings.HasPrefix(file.Path, "s3://") {
+	if file.Path == "" {
 		return false
 	}
 	if _, _, virtual := parser.ParseVirtualSourcePath(file.Path); virtual {
@@ -12162,12 +11536,6 @@ func (e *Engine) processProviderFile(
 	if mode != parser.ProviderMigrationProviderAuthoritative && !usesProvider {
 		return processResult{}, false
 	}
-	// S3 sources are not provider-owned: the provider source sets read local
-	// files, so s3:// paths use the dedicated S3 sync path (processS3Session),
-	// which handles object fetch, fingerprinting, and per-agent skip logic.
-	if strings.HasPrefix(file.Path, "s3://") {
-		return processResult{}, false
-	}
 	failureKey := providerAgentSkipCacheKey(file.Path, file.Agent)
 	if id, exists := e.failures.Lookup(failureKey); exists {
 		if e.forceParseBypassesCache(file) {
@@ -12225,7 +11593,6 @@ func (e *Engine) processProviderFile(
 		Roots:          e.sources().agentDirs[file.Agent],
 		Machine:        e.machine,
 		SourceMachines: e.sources().sourceMachines[file.Agent],
-		PathRewriter:   e.pathRewriter,
 	}
 	provider := factory.NewProvider(providerConfig)
 
@@ -12359,18 +11726,11 @@ func (e *Engine) processProviderFile(
 	// the confirmed-unchanged-skip stamp, and the write-path staging, so
 	// all three always agree.
 	//
-	// providerStatDigestEligible withholds the capture for
-	// content-authority providers under a pathRewriter: materialized
-	// remote stats cannot prove a re-download unchanged, so their remote
-	// freshness stays content-hash arbitrated.
 	var preParseStatHash *pendingProviderStatHash
-	if hasher, ok := e.sources().providerStatHashers[file.Agent]; ok &&
-		e.providerStatDigestEligible(file.Agent) {
+	if hasher, ok := e.sources().providerStatHashers[file.Agent]; ok {
 		if physicalPath := providerDiscoveredPath(source); physicalPath != "" {
 			targetKey := physicalPath
-			if e.pathRewriter != nil {
-				targetKey = e.pathRewriter(physicalPath)
-			}
+
 			preParseStatHash = &pendingProviderStatHash{
 				agent:        file.Agent,
 				physicalPath: physicalPath,
@@ -12526,9 +11886,7 @@ func (e *Engine) processProviderFile(
 			// entry keyed by the real source hash) keeps the fingerprint
 			// read so its cache key still matches.
 			lookupPath := file.Path
-			if e.pathRewriter != nil {
-				lookupPath = e.pathRewriter(file.Path)
-			}
+
 			_, hasHash := e.db.GetFileHashByAgentPath(ctx,
 				lookupPath, string(file.Agent),
 			)
@@ -12909,7 +12267,7 @@ func (e *Engine) processProviderFile(
 		}
 		stagedSink.toolResultImages = e.toolResultImages
 		stagedSink.database = e.db
-		stagedSink.idPrefix = e.idPrefix
+
 		stagedSink.disableSignals = e.disableSignalRecompute
 		stagedGCRelease = beginStagedColdSync()
 	}
@@ -12936,11 +12294,10 @@ func (e *Engine) processProviderFile(
 		}
 	} else {
 		outcome, err = parser.ParseEach(ctx, provider, parser.ParseRequest{
-			Source:             source,
-			Fingerprint:        fingerprint,
-			Machine:            machine,
-			ForceParse:         e.forceParseRequested(file),
-			StoredPathResolver: e.storedPathResolver,
+			Source:      source,
+			Fingerprint: fingerprint,
+			Machine:     machine,
+			ForceParse:  e.forceParseRequested(file),
 		}, admission.admit)
 	}
 	if err != nil && admission.validationErr == nil {
@@ -13069,10 +12426,9 @@ func (e *Engine) processProviderFile(
 				_, statErr := e.lstatSource(statPath)
 				sourceFileMissing = os.IsNotExist(statErr)
 			}
-			if e.pathRewriter != nil ||
-				(providerVirtualSourceContainerExists(file.Path) ||
-					omnigentContainerExists || sharedContainerExists ||
-					sourceFileMissing) {
+			if providerVirtualSourceContainerExists(file.Path) ||
+				omnigentContainerExists || sharedContainerExists ||
+				sourceFileMissing {
 				// The provider re-resolved this exact virtual member against a
 				// still-present shared container, or authoritatively parsed an
 				// empty Omnigent, Trae, or Cursor IDE container, or the backing
@@ -13255,7 +12611,7 @@ func (e *Engine) processProviderFile(
 			})
 		}
 	}
-	e.applyProviderFilePathPolicies(ctx, provider, file.Agent, file.Path, &res, e.idPrefix)
+	e.applyProviderFilePathPolicies(ctx, provider, file.Agent, file.Path, &res, "")
 	if file.Agent == parser.AgentClaude && cleanCache &&
 		!e.forceParseRequested(file) {
 		res.claudeRowlessFreshnessKey = e.claudeRowlessFreshnessCacheKey(file.Path, fingerprint.Hash)
@@ -13300,9 +12656,7 @@ func (e *Engine) dropUnchangedSharedSQLiteResults(ctx context.Context,
 			continue
 		}
 		lookupPath := path
-		if e.pathRewriter != nil {
-			lookupPath = e.pathRewriter(path)
-		}
+
 		_, storedMtime, ok := e.db.GetFileInfoByPath(ctx, lookupPath)
 		if !ok || storedMtime != r.Session.File.Mtime {
 			kept = append(kept, r)
@@ -13380,7 +12734,7 @@ func (e *Engine) dropShrinkingTruncatedCursorIDEResults(
 			kept = append(kept, r)
 			continue
 		}
-		id := applyIDPrefixToID(e.idPrefix, r.Session.ID)
+		id := r.Session.ID
 		archived, err := reader.ListMessageSourceUUIDs(ctx, id)
 		if err != nil {
 			// The archive cannot be verified; refusing the overwrite is the
@@ -13467,11 +12821,7 @@ func (e *Engine) providerSourceSessionOwnershipsForForceReplace(
 			scopes = resolved
 		}
 	}
-	if e.pathRewriter != nil {
-		for i := range scopes {
-			scopes[i].Path = e.pathRewriter(scopes[i].Path)
-		}
-	}
+
 	sourcePaths, err := e.db.ListStoredSourcePathHints(
 		string(agent), storedSourceDBHintScopes(scopes),
 	)
@@ -13530,13 +12880,13 @@ func (e *Engine) providerSourceMissingSessionOwnershipsForCompleteResultWithPres
 ) ([]sourceMissingMember, error) {
 	emitted := make(map[string]struct{}, len(results))
 	for _, result := range results {
-		id := applyIDPrefixToID(e.idPrefix, result.Session.ID)
+		id := result.Session.ID
 		if id != "" {
 			emitted[id] = struct{}{}
 		}
 	}
 	for _, id := range preservedSessionIDs {
-		if id := applyIDPrefixToID(e.idPrefix, id); id != "" {
+		if id != "" {
 			emitted[id] = struct{}{}
 		}
 	}
@@ -13591,7 +12941,7 @@ func (e *Engine) completeMultiSessionSourceMissingMembers(
 	paths := make(map[string]struct{}, 1)
 	emittedIDs := make([]string, 0, len(results))
 	for _, result := range results {
-		if id := applyIDPrefixToID(e.idPrefix, result.Session.ID); id != "" {
+		if id := result.Session.ID; id != "" {
 			present[id] = struct{}{}
 			emittedIDs = append(emittedIDs, id)
 		}
@@ -13599,9 +12949,7 @@ func (e *Engine) completeMultiSessionSourceMissingMembers(
 		if path == "" {
 			continue
 		}
-		if e.pathRewriter != nil {
-			path = e.pathRewriter(path)
-		}
+
 		paths[path] = struct{}{}
 	}
 	if len(paths) == 0 && sourcePath != "" {
@@ -13618,7 +12966,7 @@ func (e *Engine) completeMultiSessionSourceMissingMembers(
 			paths[identity.FilePath] = struct{}{}
 		}
 	}
-	for _, id := range e.applyIDPrefixToSessionIDs(excludedSessionIDs) {
+	for _, id := range excludedSessionIDs {
 		present[id] = struct{}{}
 	}
 
@@ -13673,7 +13021,7 @@ func (e *Engine) codebuffSourceMissingMembers(
 ) ([]sourceMissingMember, error) {
 	emitted := make(map[string]struct{}, len(results))
 	for _, result := range results {
-		if id := applyIDPrefixToID(e.idPrefix, result.Session.ID); id != "" {
+		if id := result.Session.ID; id != "" {
 			emitted[id] = struct{}{}
 		}
 	}
@@ -13705,14 +13053,14 @@ func (e *Engine) codebuffSourceMissingMembers(
 // freebuff: twin and back. Subagent IDs embed the parent's full ID, so the
 // swap covers them too.
 func (e *Engine) codebuffCounterpartID(storedID string) (string, bool) {
-	id := strings.TrimPrefix(storedID, e.idPrefix)
+	id := storedID
 	codebuffPrefix := string(parser.AgentCodebuff) + ":"
 	freebuffPrefix := string(parser.AgentFreebuff) + ":"
 	if rest, ok := strings.CutPrefix(id, codebuffPrefix); ok {
-		return applyIDPrefixToID(e.idPrefix, freebuffPrefix+rest), true
+		return freebuffPrefix + rest, true
 	}
 	if rest, ok := strings.CutPrefix(id, freebuffPrefix); ok {
-		return applyIDPrefixToID(e.idPrefix, codebuffPrefix+rest), true
+		return codebuffPrefix + rest, true
 	}
 	return "", false
 }
@@ -13726,9 +13074,7 @@ func (e *Engine) applyCodebuffClassificationPolicies(
 	ctx context.Context, filePath string, res *processResult,
 ) {
 	lookupPath := filePath
-	if e.pathRewriter != nil {
-		lookupPath = e.pathRewriter(filePath)
-	}
+
 	live := make(map[string]struct{})
 	var failed []error
 	for _, agent := range []parser.AgentType{
@@ -13760,7 +13106,7 @@ func (e *Engine) applyCodebuffClassificationPolicies(
 	}
 
 	excluded := make(map[string]struct{}, len(res.excludedSessionIDs))
-	for _, id := range e.applyIDPrefixToSessionIDs(res.excludedSessionIDs) {
+	for _, id := range res.excludedSessionIDs {
 		excluded[id] = struct{}{}
 	}
 	addExclusion := func(id string) {
@@ -13772,7 +13118,7 @@ func (e *Engine) applyCodebuffClassificationPolicies(
 	}
 	kept := res.results[:0]
 	for _, result := range res.results {
-		currentID := applyIDPrefixToID(e.idPrefix, result.Session.ID)
+		currentID := result.Session.ID
 		counterpart, ok := e.codebuffCounterpartID(currentID)
 		if !ok {
 			kept = append(kept, result)
@@ -13816,23 +13162,21 @@ func (e *Engine) claudeSourceMissingSessionOwnershipsForCompleteResult(
 	present := make(map[string]struct{}, len(results))
 	paths := make(map[string]struct{}, 1)
 	for _, result := range results {
-		if id := applyIDPrefixToID(e.idPrefix, result.Session.ID); id != "" {
+		if id := result.Session.ID; id != "" {
 			present[id] = struct{}{}
 		}
 		path := result.Session.File.Path
 		if path == "" {
 			continue
 		}
-		if e.pathRewriter != nil {
-			path = e.pathRewriter(path)
-		}
+
 		paths[path] = struct{}{}
 	}
 	if len(paths) == 0 && sourcePath != "" {
 		paths[e.effectiveSourcePath(sourcePath)] = struct{}{}
 	}
 	// Excluded IDs are owned by the parser-exclusion deletion path.
-	for _, id := range e.applyIDPrefixToSessionIDs(excludedSessionIDs) {
+	for _, id := range excludedSessionIDs {
 		present[id] = struct{}{}
 	}
 	if index := e.archiveRebuildIndex; index != nil {
@@ -14033,7 +13377,6 @@ func (e *Engine) claudeSourceFreshWithoutPrimary(
 	lookupPath string,
 	physicalPath string,
 	info os.FileInfo,
-	sourceFingerprint string,
 ) (fresh, contentVerified bool) {
 	if !e.claudeSourceHasOnlyPreservedStaleForks(ctx, lookupPath) {
 		return false, false
@@ -14044,13 +13387,9 @@ func (e *Engine) claudeSourceFreshWithoutPrimary(
 	if !ok || project == "" || parser.NeedsProjectReparse(project) {
 		return false, false
 	}
-	currentHash := sourceFingerprint
-	if currentHash == "" {
-		var err error
-		currentHash, err = computeFileHashPrefix(physicalPath, info.Size())
-		if err != nil {
-			return false, false
-		}
+	currentHash, err := computeFileHashPrefix(physicalPath, info.Size())
+	if err != nil {
+		return false, false
 	}
 	if !e.claudeRowlessFreshnessMarked(
 		lookupPath, physicalPath, currentHash, info.ModTime().UnixNano(),
@@ -14088,7 +13427,7 @@ func (e *Engine) cacheClaudeRowlessFreshness(
 		return false
 	}
 	e.cacheSkip(
-		job.claudeRowlessFreshnessKey, job.mtime, job.sourceFingerprint,
+		job.claudeRowlessFreshnessKey, job.mtime,
 	)
 	return true
 }
@@ -14157,7 +13496,7 @@ func (e *Engine) applyProviderFilePathPolicies(
 	}
 
 	excluded := make(map[string]struct{}, len(res.excludedSessionIDs))
-	for _, id := range applyIDPrefixToIDs(idPrefix, res.excludedSessionIDs) {
+	for _, id := range res.excludedSessionIDs {
 		excluded[id] = struct{}{}
 	}
 	// Source-missing ownership takes precedence over parser-exclusion cleanup
@@ -14167,7 +13506,7 @@ func (e *Engine) applyProviderFilePathPolicies(
 	sourceMissing := make(map[string]struct{})
 	if agent == parser.AgentCline {
 		for _, member := range res.sourceMissingMembers {
-			if id := applyIDPrefixToID(idPrefix, member.sessionID); id != "" {
+			if id := member.sessionID; id != "" {
 				sourceMissing[id] = struct{}{}
 			}
 		}
@@ -14194,9 +13533,7 @@ func (e *Engine) applyProviderFilePathPolicies(
 			continue
 		}
 		lookupPath := path
-		if e.pathRewriter != nil {
-			lookupPath = e.pathRewriter(path)
-		}
+
 		originalID := result.Session.ID
 		admitted := e.cwdFilter.allows(sourceCwdForFilter(result.Session.Cwd, sourceCwdDecision{
 			resolution: res.sourceCwdResolution,
@@ -14215,7 +13552,6 @@ func (e *Engine) applyProviderFilePathPolicies(
 		if currentID != originalID && res.retrySessionIDs[originalID] {
 			res.retrySessionIDs[currentID] = true
 		}
-		currentPrefixedID := applyIDPrefixToID(idPrefix, currentID)
 
 		agentsToQuery := []string{string(agent)}
 		var existingIDs []string
@@ -14282,7 +13618,7 @@ func (e *Engine) applyProviderFilePathPolicies(
 		}
 		if !suppress {
 			for id := range excluded {
-				if id == currentID || id == currentPrefixedID {
+				if id == currentID {
 					continue
 				}
 				if e.db.IsSessionExcluded(ctx, id) || e.db.IsSessionTrashed(ctx, id) {
@@ -14293,7 +13629,7 @@ func (e *Engine) applyProviderFilePathPolicies(
 		}
 		if !suppress {
 			for _, id := range existingIDs {
-				if id == currentID || id == currentPrefixedID {
+				if id == currentID {
 					continue
 				}
 				if e.db.IsSessionExcluded(ctx, id) || e.db.IsSessionTrashed(ctx, id) {
@@ -14305,7 +13641,7 @@ func (e *Engine) applyProviderFilePathPolicies(
 		if suppress {
 			// Keep a trashed current ID trashed rather than converting it to a
 			// parser deletion; the upsert's trash guard already hides it.
-			if (currentPrefixedID == "" || !e.db.IsSessionTrashed(ctx, currentPrefixedID)) &&
+			if (currentID == "" || !e.db.IsSessionTrashed(ctx, currentID)) &&
 				!e.db.IsSessionTrashed(ctx, currentID) {
 				addExclusion(currentID)
 			}
@@ -14314,7 +13650,7 @@ func (e *Engine) applyProviderFilePathPolicies(
 
 		// Stale-row cleanup for live siblings the current parse supersedes.
 		for _, id := range existingIDs {
-			if id == currentID || id == currentPrefixedID {
+			if id == currentID {
 				continue
 			}
 			addExclusion(id)
@@ -14338,10 +13674,7 @@ func (e *Engine) stageProviderStatHash(
 		// parsing (preParseStatHash), so it cannot describe a file state
 		// the parse never read; the fallback below recomputes from the
 		// physical on-disk chat path only for paths that bypassed
-		// processProviderFile's capture. The cache key uses the
-		// pathRewriter's "host:/remote/path" form so remote-synced
-		// sources keep hashing a real local file but read back under
-		// the canonical logical key.
+		// processProviderFile's capture.
 		//
 		// The digest is persisted only after the matching source's
 		// sessions-table write commits successfully. The per-row persist
@@ -14355,13 +13688,10 @@ func (e *Engine) stageProviderStatHash(
 		// same digest-eligibility rule so a path-rewritten import of a
 		// content-authority provider never re-stages what the pre-parse
 		// site deliberately withheld.
-		if res.providerStatHash == nil &&
-			e.providerStatDigestEligible(agent) {
+		if res.providerStatHash == nil {
 			if hasher, ok := e.sources().providerStatHashers[agent]; ok {
 				targetKey := filePath
-				if e.pathRewriter != nil {
-					targetKey = e.pathRewriter(filePath)
-				}
+
 				if targetKey != "" {
 					res.providerStatHash = &pendingProviderStatHash{
 						agent:        agent,
@@ -14394,7 +13724,7 @@ func (e *Engine) deleteParserExcludedSessions(ctx context.Context,
 		return nil, nil
 	}
 
-	excluded := e.applyIDPrefixToSessionIDs(res.excludedSessionIDs)
+	excluded := res.excludedSessionIDs
 	if len(excluded) > 0 {
 		if e.parserExclusionPolicy != nil {
 			if err := e.parserExclusionPolicy(ctx, excluded); err != nil {
@@ -14455,16 +13785,7 @@ func (e *Engine) storedSourceRanksHigher(
 	if !resolves || !ranks || storedPath == "" {
 		return false, nil
 	}
-	if e.pathRewriter != nil {
-		if e.storedPathResolver == nil {
-			return false, nil
-		}
-		resolvedPath, ok := e.storedPathResolver(storedPath)
-		if !ok || resolvedPath == "" {
-			return false, nil
-		}
-		storedPath = resolvedPath
-	}
+
 	stored, found, err := resolver.SourceForReconciliation(
 		ctx, storedPath, candidate.ProjectHint,
 	)
@@ -14493,7 +13814,6 @@ func (e *Engine) providerSourceLowerRanked(
 	fullSessionID := applyIDPrefixToID(
 		provider.Definition().IDPrefix, identity,
 	)
-	fullSessionID = applyIDPrefixToID(e.idPrefix, fullSessionID)
 	storedPath := e.db.GetSessionFilePath(ctx, fullSessionID)
 	return e.storedSourceRanksHigher(ctx, provider, storedPath, candidate)
 }
@@ -14595,9 +13915,7 @@ func (e *Engine) sourceCwdLookupPath(source parser.SourceRef) string {
 	if path == "" {
 		path = source.FingerprintKey
 	}
-	if e.pathRewriter != nil {
-		path = e.pathRewriter(path)
-	}
+
 	return path
 }
 
@@ -14636,7 +13954,7 @@ func (e *Engine) reconcileFilteredSourceCwd(ctx context.Context,
 		)) {
 			continue
 		}
-		id := applyIDPrefixToID(e.idPrefix, result.Session.ID)
+		id := result.Session.ID
 		agent := string(result.Session.Agent)
 		path := e.effectiveSourcePath(result.Session.File.Path)
 		if id == "" || agent == "" || path == "" {
@@ -14799,7 +14117,6 @@ func providerProcessCacheKey(
 
 // providerAgentSkipCacheKey prevents providers with overlapping roots or a
 // shared on-disk format from inheriting another agent's cached source state.
-// The path stays first so remote-cache path translation remains valid.
 func providerAgentSkipCacheKey(key string, agent parser.AgentType) string {
 	if key == "" || agent == "" {
 		return key
@@ -14808,8 +14125,7 @@ func providerAgentSkipCacheKey(key string, agent parser.AgentType) string {
 }
 
 // SplitProviderSkipCachePath separates the filesystem path from the provider
-// qualifier carried by a skip-cache identity. Remote import translates only
-// the path and reattaches the suffix after the path mapping succeeds.
+// qualifier carried by a skip-cache identity.
 func SplitProviderSkipCachePath(key string) (path, suffix string) {
 	path, qualified, ok := strings.Cut(key, db.ProviderAgentSkipMarker)
 	if !ok {
@@ -14881,9 +14197,7 @@ func (e *Engine) providerSkipCacheEntryFreshInDB(ctx context.Context,
 		return true, false
 	}
 	lookupPath := providerSkipLookupPath(file, source, fingerprint)
-	if e.pathRewriter != nil {
-		lookupPath = e.pathRewriter(lookupPath)
-	}
+
 	if providerSemantics.SkipCacheFreshWithoutStoredRow {
 		storedIDs, err := e.db.ListSessionIDsByFilePath(ctx,
 			lookupPath, string(agent),
@@ -14931,9 +14245,7 @@ func (e *Engine) shouldSkipProviderSource(ctx context.Context,
 		return false
 	}
 	lookupPath := providerSkipLookupPath(file, source, fingerprint)
-	if e.pathRewriter != nil {
-		lookupPath = e.pathRewriter(lookupPath)
-	}
+
 	storedSize, storedMtime, ok := e.db.GetFileInfoByAgentPath(ctx,
 		lookupPath, string(agent),
 	)
@@ -15097,7 +14409,7 @@ const sourceHashSkipMarker = "?source_hash="
 // current. Drop that family so the source reparses once and establishes a
 // trustworthy key.
 func normalizeSourceHashSkipCache(
-	cache map[string]int64, fingerprints map[string]string,
+	cache map[string]int64,
 ) (map[string]string, map[string]struct{}) {
 	index := make(map[string]string)
 	counts := make(map[string]int)
@@ -15117,16 +14429,10 @@ func normalizeSourceHashSkipCache(
 		if hashed && counts[base] > 1 {
 			delete(cache, path)
 			ambiguous[base] = struct{}{}
-			if fingerprints != nil {
-				delete(fingerprints, path)
-			}
 		}
 	}
 	for base := range index {
 		delete(cache, base)
-		if fingerprints != nil {
-			delete(fingerprints, base)
-		}
 		if counts[base] > 1 {
 			delete(index, base)
 		}
@@ -15138,7 +14444,7 @@ func normalizeSourceHashSkipCache(
 // The returned work count measures sibling-index probes and is used by the
 // cardinality regression to keep watcher-time work independent of cache size.
 func (e *Engine) cacheSkip(
-	path string, mtime int64, sourceFingerprint ...string,
+	path string, mtime int64,
 ) int {
 	e.skipMu.Lock()
 	old, exists := e.skipCache[path]
@@ -15153,18 +14459,6 @@ func (e *Engine) cacheSkip(
 	}
 	if base, _, hashed := strings.Cut(path, sourceHashSkipMarker); hashed {
 		e.skipHashKeys[base] = path
-	}
-	fingerprint := ""
-	if len(sourceFingerprint) > 0 {
-		fingerprint = sourceFingerprint[0]
-	}
-	if fingerprint != "" {
-		if e.skipFingerprints == nil {
-			e.skipFingerprints = make(map[string]string)
-		}
-		e.skipFingerprints[path] = fingerprint
-	} else if e.skipFingerprints != nil {
-		delete(e.skipFingerprints, path)
 	}
 	e.skipMu.Unlock()
 	return work
@@ -15195,12 +14489,10 @@ func (e *Engine) clearSkipInMemory(path string) int {
 	before := len(e.skipCache)
 	work := e.removeSkipHashSiblingsLocked(path)
 	delete(e.skipCache, path)
-	delete(e.skipFingerprints, path)
 	legacyPath := legacyProviderSkipCacheKey(path)
 	if legacyPath != "" {
 		work += e.removeSkipHashSiblingsLocked(legacyPath)
 		delete(e.skipCache, legacyPath)
-		delete(e.skipFingerprints, legacyPath)
 	}
 	e.skipCacheDirty = e.skipCacheDirty || len(e.skipCache) != before
 	return work
@@ -15230,23 +14522,20 @@ func (e *Engine) removeSkipHashSiblingsLocked(path string) int {
 	defer func() { e.skipCacheDirty = e.skipCacheDirty || len(e.skipCache) != before }()
 	if e.skipHashKeys == nil {
 		e.skipHashKeys, _ = normalizeSourceHashSkipCache(
-			e.skipCache, e.skipFingerprints,
+			e.skipCache,
 		)
 	}
 	base, _, hasHash := strings.Cut(path, sourceHashSkipMarker)
 	if !hasHash {
 		if sibling, ok := e.skipHashKeys[path]; ok {
 			delete(e.skipCache, sibling)
-			delete(e.skipFingerprints, sibling)
 			delete(e.skipHashKeys, path)
 		}
 		return 1
 	}
 	delete(e.skipCache, base)
-	delete(e.skipFingerprints, base)
 	if sibling, ok := e.skipHashKeys[base]; ok {
 		delete(e.skipCache, sibling)
-		delete(e.skipFingerprints, sibling)
 		delete(e.skipHashKeys, base)
 	}
 	return 2
@@ -15259,7 +14548,6 @@ func (e *Engine) clearWatcherOverflowCaches(ctx context.Context) {
 	e.skipMu.Lock()
 	e.skipCache = make(map[string]int64)
 	e.skipCacheDirty = true
-	e.skipFingerprints = make(map[string]string)
 	e.skipHashKeys = make(map[string]string)
 	e.skipMu.Unlock()
 	e.ResetFailureCache(ctx)
@@ -15272,75 +14560,6 @@ func (e *Engine) clearWatcherOverflowCaches(ctx context.Context) {
 	e.clearTrustedSQLiteContainers()
 	e.clearVerifiedSources()
 	parser.EvictAllCodexSessionIndexes()
-}
-
-// InjectSkipCache merges entries into the in-memory skip
-// cache. Used by remote sync to pre-populate with
-// translated paths.
-func (e *Engine) InjectSkipCache(entries map[string]int64) {
-	e.skipMu.Lock()
-	defer e.skipMu.Unlock()
-	if e.skipHashKeys == nil {
-		e.skipHashKeys, _ = normalizeSourceHashSkipCache(
-			e.skipCache, e.skipFingerprints,
-		)
-	}
-	incoming := make(map[string]int64, len(entries))
-	maps.Copy(incoming, entries)
-	_, ambiguous := normalizeSourceHashSkipCache(incoming, nil)
-	for base := range ambiguous {
-		e.removeSkipHashSiblingsLocked(base + sourceHashSkipMarker)
-	}
-	for path, mtime := range incoming {
-		e.removeSkipHashSiblingsLocked(path)
-		if old, exists := e.skipCache[path]; !exists || old != mtime {
-			e.skipCacheDirty = true
-		}
-		e.skipCache[path] = mtime
-		if base, _, hashed := strings.Cut(path, sourceHashSkipMarker); hashed {
-			e.skipHashKeys[base] = path
-		}
-	}
-}
-
-// SnapshotSkipCache returns a copy of the in-memory skip
-// cache.
-func (e *Engine) SnapshotSkipCache() map[string]int64 {
-	e.skipMu.RLock()
-	defer e.skipMu.RUnlock()
-	out := make(map[string]int64, len(e.skipCache))
-	maps.Copy(out, e.skipCache)
-	return out
-}
-
-// SnapshotRetrySafeSkipCache returns cache state that can survive a failed
-// replacement-database rebuild. Entries for sources that changed exclusion or
-// source-missing state are omitted because those changes exist only in the
-// replacement database that will be discarded.
-func (e *Engine) SnapshotRetrySafeSkipCache() map[string]int64 {
-	e.skipMu.RLock()
-	defer e.skipMu.RUnlock()
-	out := make(map[string]int64, len(e.skipCache))
-	for key, mtime := range e.skipCache {
-		path, _ := SplitProviderSkipCachePath(key)
-		if _, unsafe := e.retryUnsafeSkipPaths[path]; unsafe {
-			continue
-		}
-		out[key] = mtime
-	}
-	return out
-}
-
-func (e *Engine) markRetryUnsafeSkipSource(path string) {
-	if path == "" {
-		return
-	}
-	e.skipMu.Lock()
-	if e.retryUnsafeSkipPaths == nil {
-		e.retryUnsafeSkipPaths = make(map[string]struct{})
-	}
-	e.retryUnsafeSkipPaths[path] = struct{}{}
-	e.skipMu.Unlock()
 }
 
 // persistSkipCache writes the in-memory skip cache to the
@@ -15412,12 +14631,28 @@ func (e *Engine) persistSkipCacheInto(ctx context.Context, target *db.DB) int {
 // match what is already stored in the database (by session ID).
 // This relies on mtime changing on any write, which holds for
 // append-only session files under normal filesystem behavior.
-// S3 callers pass an object fingerprint to guard same-size,
-// same-timestamp rewrites on object stores with coarse mtimes.
 func (e *Engine) shouldSkipFile(ctx context.Context,
 	sessionID string, info os.FileInfo,
 ) bool {
-	return e.shouldSkipFileWithPrefix(ctx, e.idPrefix, sessionID, info)
+	if e.forceParse {
+		return false
+	}
+	fullID := sessionID
+	storedSize, storedMtime, ok := e.db.GetSessionFileInfo(ctx,
+		fullID,
+	)
+	if !ok {
+		return false
+	}
+	if storedSize != info.Size() ||
+		storedMtime != info.ModTime().UnixNano() {
+		return false
+	}
+	if e.db.GetSessionDataVersion(ctx, fullID) <
+		db.CurrentDataVersion() {
+		return false
+	}
+	return true
 }
 
 // providerSourceUnchangedInDB reports whether a provider source's persisted
@@ -15444,9 +14679,7 @@ func (e *Engine) providerSourceUnchangedInDB(
 	if lookupPath == "" {
 		return false
 	}
-	if e.pathRewriter != nil {
-		lookupPath = e.pathRewriter(lookupPath)
-	}
+
 	agent := source.Provider
 	storedSize, storedMtime, ok := e.db.GetFileInfoByAgentPath(ctx,
 		lookupPath, string(agent),
@@ -15499,8 +14732,7 @@ func providerFingerprintMatchesStored(agent parser.AgentType, fingerprint parser
 // that follows would leave a matching digest that permanently suppresses
 // every later retry. The digest is the
 // pre-parse snapshot captured in processProviderFile, so it describes
-// exactly the file state the fingerprint verified, and the DB key uses the
-// pathRewriter's logical key, mirroring the write path. Providers without
+// exactly the file state the fingerprint verified. Providers without
 // a MultiFileStatHasher carry no digest and are skipped here; their
 // freshness is owned by the engine's existing stat and skip-cache paths.
 func (e *Engine) stampProviderStatHashForConfirmedSource(
@@ -15561,9 +14793,7 @@ func (e *Engine) shouldSkipByPath(ctx context.Context,
 		return false
 	}
 	lookupPath := path
-	if e.pathRewriter != nil {
-		lookupPath = e.pathRewriter(path)
-	}
+
 	storedSize, storedMtime, ok := e.db.GetFileInfoByPath(ctx, lookupPath)
 	if !ok {
 		return false
@@ -15641,14 +14871,8 @@ func (e *Engine) providerSingleSessionFresh(
 		return 0, false, false, false
 	}
 	lookupPath := path
-	if e.pathRewriter != nil {
-		lookupPath = e.pathRewriter(path)
-	}
-	fullID := applyIDPrefixToID(e.idPrefix, sessionID)
-	// statPath is the on-disk file the stat came from: lookupPath when it
-	// resolves (local sync, where lookupPath == path), otherwise the physical
-	// source path (remote sync rewrites path to a non-local logical key). The
-	// content guard below hashes statPath, so it must be the openable file.
+
+	fullID := sessionID
 	statPath := lookupPath
 	info, err := os.Stat(lookupPath)
 	if err != nil {
@@ -15664,7 +14888,7 @@ func (e *Engine) providerSingleSessionFresh(
 	primaryPath := e.db.GetSessionFilePathNotSourceMissing(ctx, fullID)
 	if primaryPath == "" {
 		fresh, contentVerified := e.claudeSourceFreshWithoutPrimary(
-			ctx, lookupPath, statPath, info, "",
+			ctx, lookupPath, statPath, info,
 		)
 		if !fresh {
 			return 0, false, false, false
@@ -15725,11 +14949,7 @@ func (e *Engine) providerIncrementalIdentityChanged(ctx context.Context,
 	lookupPath string,
 	info os.FileInfo,
 ) bool {
-	if e.pathRewriter != nil {
-		// Remote imports rewrite per-run temp paths to stable source paths;
-		// the temp inode is expected to change between identical downloads.
-		return false
-	}
+
 	curInode, curDevice := getFileIdentity(lookupPath, info)
 	return e.db.FileIdentityChanged(ctx, lookupPath, curInode, curDevice)
 }
@@ -15741,22 +14961,6 @@ func (e *Engine) providerIncrementalIdentityChanged(ctx context.Context,
 // fast writes landing in one filesystem mtime granule (or a coarse-mtime
 // filesystem) leave every stat signal identical, so only the content hash
 // distinguishes a genuine rewrite from an unchanged file.
-//
-// hashPath is the physical file the stat came from -- the local path for
-// local sources, the materialized download for remote (path-rewritten)
-// sources. The stored file_hash is computed over those same materialized
-// bytes on both the full-parse (hashJSONLSourceFile) and incremental
-// (ComputeFileHashPrefix) paths, so the on-disk prefix hash is directly
-// comparable regardless of the logical key the row is stored under. That is
-// also why this is the correct freshness signal for remote sync: every
-// re-download gets a fresh inode, so the inode net is disabled to avoid a
-// false-positive re-parse, but identical content still hashes equal here while
-// a genuine rewrite does not. shouldSkipFile has already confirmed the stored
-// file_size equals the current size, so the prefix hash covers the stored byte
-// range. Rows without a stored hash (legacy or non-fingerprinted) report an
-// unverified match. Gate-eligible local sources then fall through to the
-// fingerprint path once, while sources that cannot use the local-stat gate
-// preserve the legacy size/mtime/identity freshness behavior.
 func (e *Engine) providerIncrementalContentChanged(ctx context.Context,
 	fullID, hashPath string,
 	info os.FileInfo,
@@ -15869,9 +15073,7 @@ func (e *Engine) providerSourceFreshBeforeFingerprint(
 		return 0, false
 	}
 	lookupPath := path
-	if e.pathRewriter != nil {
-		lookupPath = e.pathRewriter(path)
-	}
+
 	info, err := os.Stat(lookupPath)
 	if err != nil {
 		info, err = os.Stat(path)
@@ -15883,13 +15085,7 @@ func (e *Engine) providerSourceFreshBeforeFingerprint(
 	// (Codebuff/Freebuff). When the provider implements
 	// MultiFileStatHasher and the side-table holds a digest that
 	// matches the current stat snapshot, the source is fresh and we
-	// short-circuit provider.Fingerprint. The hash is computed from
-	// the physical on-disk chat path while the cache lookup uses the
-	// pathRewriter's logical key, mirroring the write path; without
-	// that split a remote-synced source whose stored file_path is
-	// "host:/remote/path" would hash zero-stat tuples for every
-	// companion and miss real content drift on the materialized
-	// download. A stored digest that does not match the current
+	// short-circuit provider.Fingerprint. A stored digest that does not match the current
 	// stat snapshot forces provider.Fingerprint instead of falling
 	// through to the size/mtime composite below, because that
 	// composite can miss same-size sibling rewrites whose mtime
@@ -16366,9 +15562,7 @@ func (e *Engine) tryIncrementalJSONL(
 		return processResult{}, false
 	}
 	lookupPath := file.Path
-	if e.pathRewriter != nil {
-		lookupPath = e.pathRewriter(file.Path)
-	}
+
 	inc, ok := e.db.GetSessionForIncremental(ctx, lookupPath, string(agent))
 	if !ok || inc.FileSize <= 0 {
 		return processResult{}, false
@@ -16406,7 +15600,7 @@ func (e *Engine) tryIncrementalJSONL(
 	// state. Only check when both sides have a known identity
 	// (non-zero); zeros mean the data is missing or the
 	// filesystem does not expose a stable identity.
-	if e.pathRewriter == nil && inc.FileInode != 0 && inc.FileDevice != 0 {
+	if inc.FileInode != 0 && inc.FileDevice != 0 {
 		curInode, curDevice := getFileIdentity(file.Path, info)
 		if curInode != 0 && curDevice != 0 &&
 			(curInode != inc.FileInode ||
@@ -16422,17 +15616,10 @@ func (e *Engine) tryIncrementalJSONL(
 		}
 	}
 	if currentSize < inc.FileSize {
-		if e.pathRewriter != nil {
-			log.Printf(
-				"incremental %s remote source: file truncated from %d to %d, full parse",
-				agent, inc.FileSize, currentSize,
-			)
-		} else {
-			log.Printf(
-				"incremental %s %s: file truncated from %d to %d, full parse",
-				agent, file.Path, inc.FileSize, currentSize,
-			)
-		}
+		log.Printf(
+			"incremental %s %s: file truncated from %d to %d, full parse",
+			agent, file.Path, inc.FileSize, currentSize,
+		)
 		return processResult{forceReplace: true}, false
 	}
 	if currentSize == inc.FileSize {
@@ -16981,9 +16168,7 @@ func (e *Engine) codexFingerprintFreshness(ctx context.Context,
 	semantics parser.ProviderSyncSemantics,
 ) (fresh, metadataVerified bool) {
 	lookupPath := path
-	if e.pathRewriter != nil {
-		lookupPath = e.pathRewriter(path)
-	}
+
 	storedSize, storedMtime, ok := e.db.GetFileInfoByAgentPath(ctx,
 		lookupPath, string(agent),
 	)
@@ -17059,9 +16244,7 @@ func (e *Engine) codexIndexNeedsRefreshSince(ctx context.Context,
 		return false
 	}
 	lookupPath := path
-	if e.pathRewriter != nil {
-		lookupPath = e.pathRewriter(path)
-	}
+
 	if _, _, ok := e.db.GetFileInfoByPath(ctx, lookupPath); !ok {
 		return false
 	}
@@ -17098,7 +16281,7 @@ func (e *Engine) codexIndexSessionNameState(
 		return false, true
 	}
 	storedName, found, err := e.db.GetSessionName(
-		context.Background(), e.idPrefix+"codex:"+uuid,
+		context.Background(), "codex:"+uuid,
 	)
 	if err != nil || !found {
 		return true, true
@@ -17114,9 +16297,7 @@ func (e *Engine) codexCachedIndexSessionNameState(ctx context.Context,
 	path string,
 ) (changed, verified bool) {
 	lookupPath := path
-	if e.pathRewriter != nil {
-		lookupPath = e.pathRewriter(path)
-	}
+
 	if _, _, ok := e.db.GetFileInfoByPath(ctx, lookupPath); !ok {
 		return false, true
 	}
@@ -17238,7 +16419,7 @@ func (e *Engine) pickPreferredCodexIndexDiscoveredFile(ctx context.Context,
 				break
 			}
 		}
-		storedPath := e.db.GetSessionFilePath(ctx, e.idPrefix+"codex:"+uuid)
+		storedPath := e.db.GetSessionFilePath(ctx, "codex:"+uuid)
 		if uuid != "" && storedPath != "" {
 			storedPath = filepath.Clean(storedPath)
 			for _, candidate := range candidates {
@@ -17314,7 +16495,7 @@ func (e *Engine) codexPinnedProviderSource(
 // index, so the index path only refreshes renames of already-synced sessions.
 func (e *Engine) codexStoredNameDiffers(uuid, indexTitle string) bool {
 	return e.codexStoredNameDiffersBySessionID(
-		e.idPrefix+"codex:"+uuid, indexTitle, false,
+		"codex:"+uuid, indexTitle, false,
 	)
 }
 
@@ -17348,13 +16529,7 @@ func pickPreferredCodexDiscoveredFile(ctx context.Context,
 		filepath.Base(candidates[0].Path),
 	); id != "" {
 		sessionID := "codex:" + id
-		for _, candidate := range candidates {
-			storedPath := database.GetSessionFilePath(ctx, applyIDPrefixToID(
-				discoveredFileIDPrefix(candidate), sessionID,
-			))
-			if storedPath == "" {
-				continue
-			}
+		if storedPath := database.GetSessionFilePath(ctx, sessionID); storedPath != "" {
 			storedPath = filepath.Clean(storedPath)
 			for _, candidate := range candidates {
 				if filepath.Clean(candidate.Path) == storedPath {
@@ -17925,7 +17100,7 @@ func (e *Engine) normalizePendingWriteMachines(
 		if batch[i].sess.ID == "" {
 			continue
 		}
-		id := applyIDPrefixToID(e.idPrefix, batch[i].sess.ID)
+		id := batch[i].sess.ID
 		if _, exists := indexes[id]; !exists {
 			ids = append(ids, id)
 		}
@@ -18020,15 +17195,14 @@ type writeBatchOutcome struct {
 }
 
 type skipCacheWrite struct {
-	agent             parser.AgentType
-	key               string
-	mtime             int64
-	sourceFingerprint string
+	agent parser.AgentType
+	key   string
+	mtime int64
 }
 
 func (e *Engine) promoteSkipCacheWrites(writes []skipCacheWrite) {
 	for _, write := range writes {
-		e.cacheSkip(write.key, write.mtime, write.sourceFingerprint)
+		e.cacheSkip(write.key, write.mtime)
 	}
 }
 
@@ -18046,10 +17220,7 @@ func (e *Engine) markStaleFailedMemberWrite(ctx context.Context, pw pendingWrite
 	if pw.sess.Agent != parser.AgentOmnigent || pw.sess.ID == "" {
 		return
 	}
-	// Sessions are stored under the remote-sync prefixed ID
-	// (applyRemoteRewrites in prepareSessionWrite), so the demotion must
-	// target the same row.
-	id := applyIDPrefixToID(e.idPrefix, pw.sess.ID)
+	id := pw.sess.ID
 	staleVersion := max(db.CurrentDataVersion()-1, 0)
 	if e.db.GetSessionDataVersion(ctx, id) > staleVersion {
 		if err := e.db.SetSessionDataVersion(ctx, id, staleVersion); err != nil {
@@ -18175,7 +17346,7 @@ func (e *Engine) preserveUnavailableSourceProjects(
 				continue
 			}
 		}
-		storedID := applyIDPrefixToID(e.idPrefix, sess.ID)
+		storedID := sess.ID
 		if _, exists := indexes[storedID]; !exists {
 			ids = append(ids, storedID)
 		}
@@ -18403,7 +17574,7 @@ func (e *Engine) writeBatchWithOutcomeContext(
 		}
 		if claudeSources != nil {
 			// Keep contributing paths and content in the same transaction.
-			version := e.db.GetSessionDataVersion(ctx, applyIDPrefixToID(e.idPrefix, pw.sess.ID))
+			version := e.db.GetSessionDataVersion(ctx, pw.sess.ID)
 			stale := version > 0 && version < db.CurrentDataVersion()
 			written := e.writeBatchBulkWithOutcomeContext(ctx, batch[i:i+1], forceReplace || stale)
 			outcome.writtenSessions += written.writtenSessions
@@ -18463,7 +17634,6 @@ func (e *Engine) writeBatchWithOutcomeContext(
 					e.cacheSkip(
 						pw.sess.File.Path,
 						pw.sess.File.Mtime,
-						pw.sess.File.Hash,
 					)
 				}
 				continue
@@ -18695,7 +17865,7 @@ func (e *Engine) prepareSessionNormalizedContext(
 	}
 	candidate.Messages, _ = e.projectToolResultImagesForPrepare(candidate.Messages)
 	s, msgs := candidate.Session, candidate.Messages
-	if err := e.applyRemoteRewritesContext(ctx, &s, msgs); err != nil {
+	if err := ctx.Err(); err != nil {
 		return ingest.PreparedSession{}, sessionWritePreserved, err
 	}
 	if e.archiveSessionPolicy != nil {
@@ -19024,9 +18194,8 @@ func visualStudioCopilotMessageHasArchiveUpdate(
 }
 
 type batchSourceFile struct {
-	path        string
-	mtime       int64
-	fingerprint string
+	path  string
+	mtime int64
 }
 
 type projectIdentityCacheEntry struct {
@@ -19188,7 +18357,6 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 						e.cacheSkip(
 							pw.sess.File.Path,
 							pw.sess.File.Mtime,
-							pw.sess.File.Hash,
 						)
 					}
 					continue
@@ -19313,9 +18481,8 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 		pendingIndexes = append(pendingIndexes, pendingIndex)
 		pendingByID[s.ID] = pw
 		sources = append(sources, batchSourceFile{
-			path:        pw.sess.File.Path,
-			mtime:       pw.sess.File.Mtime,
-			fingerprint: pw.sess.File.Hash,
+			path:  pw.sess.File.Path,
+			mtime: pw.sess.File.Mtime,
 		})
 	}
 	if len(writes) == 0 {
@@ -19362,7 +18529,7 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 		outcome.resolved[pendingIndex] = true
 		if source := sources[excludedIndex]; source.path != "" {
 			e.cacheSkip(
-				source.path, source.mtime, source.fingerprint,
+				source.path, source.mtime,
 			)
 		}
 	}
@@ -19460,7 +18627,7 @@ func (e *Engine) cachedProjectIdentity(machine, rootPath string) projectIdentity
 	// automountd/opendirectoryd CPU storm.
 	// mayProbeLocalPath also guards export.NormalizeRootPath below, which
 	// resolves symlinks and would reach into a protected location on its own.
-	if !e.disableProjectDiscovery && e.idPrefix == "" && e.pathRewriter == nil &&
+	if !e.disableProjectDiscovery &&
 		e.isLocalMachineAttribution(machine) && e.mayProbeLocalPath(rootPath) {
 		if normalized, ok, err := export.NormalizeRootPath(rootPath); err == nil && ok {
 			identity.rootPath = normalized
@@ -19970,12 +19137,10 @@ func (e *Engine) writeIncremental(ctx context.Context,
 	subagentLinks := make([]db.ToolCallSubagentLink, len(inc.links))
 	for i, link := range inc.links {
 		subagentLinks[i] = db.ToolCallSubagentLink{
-			ToolUseID: link.ToolUseID,
-			SubagentSessionID: applyIDPrefixToID(
-				e.idPrefix, link.SubagentSessionID,
-			),
-			HasResult:        link.HasResult,
-			ResultContentLen: link.ResultContentLen,
+			ToolUseID:         link.ToolUseID,
+			SubagentSessionID: link.SubagentSessionID,
+			HasResult:         link.HasResult,
+			ResultContentLen:  link.ResultContentLen,
 		}
 		toolCall := db.ToolCall{
 			ResultContent:       parser.DecodeContent(link.ResultContentRaw),
@@ -20008,9 +19173,6 @@ func (e *Engine) writeIncremental(ctx context.Context,
 		toolCall := db.ToolCall{ResultEvents: resultEvents}
 		for j := range toolCall.ResultEvents {
 			db.PrepareToolResultEvent(&toolCall.ResultEvents[j])
-			toolCall.ResultEvents[j].SubagentSessionID = applyIDPrefixToID(
-				e.idPrefix, toolCall.ResultEvents[j].SubagentSessionID,
-			)
 		}
 		// The database sanitizes after resolving the target category, preserving
 		// raw identity and blocked-output lengths until then.
@@ -20253,7 +19415,6 @@ func (e *Engine) writeSessionFullWithResolver(
 				e.cacheSkip(
 					pw.sess.File.Path,
 					pw.sess.File.Mtime,
-					pw.sess.File.Hash,
 				)
 			}
 			return err
@@ -20430,70 +19591,6 @@ func openCodeUsageOnlyArchiveLooksIncomplete(
 	return ingest.OpenCodeUsageOnlyArchiveLooksIncomplete(parsed, stored)
 }
 
-func (e *Engine) applyIDPrefixToSessionIDs(ids []string) []string {
-	return applyIDPrefixToIDs(e.idPrefix, ids)
-}
-
-// applyRemoteRewrites rewrites stored source paths and, when configured,
-// prefixes session IDs for remote sync.
-func (e *Engine) applyRemoteRewrites(
-	s *db.Session, msgs []db.Message,
-) {
-	_ = e.applyRemoteRewritesContext(context.Background(), s, msgs)
-}
-
-func (e *Engine) applyRemoteRewritesContext(
-	ctx context.Context, s *db.Session, msgs []db.Message,
-) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if e.pathRewriter != nil && s.FilePath != nil {
-		fp := e.pathRewriter(*s.FilePath)
-		s.FilePath = &fp
-	}
-	if e.idPrefix == "" {
-		return nil
-	}
-	s.ID = applyIDPrefixToID(e.idPrefix, s.ID)
-	if s.ParentSessionID != nil && *s.ParentSessionID != "" {
-		p := applyIDPrefixToID(e.idPrefix, *s.ParentSessionID)
-		s.ParentSessionID = &p
-	}
-	if s.ParserParentSessionID != nil && *s.ParserParentSessionID != "" {
-		p := applyIDPrefixToID(e.idPrefix, *s.ParserParentSessionID)
-		s.ParserParentSessionID = &p
-	}
-	for i := range msgs {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		msgs[i].SessionID = s.ID
-		for j := range msgs[i].ToolCalls {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			msgs[i].ToolCalls[j].SessionID = s.ID
-			if msgs[i].ToolCalls[j].SubagentSessionID != "" {
-				msgs[i].ToolCalls[j].SubagentSessionID = applyIDPrefixToID(
-					e.idPrefix,
-					msgs[i].ToolCalls[j].SubagentSessionID,
-				)
-			}
-			for k := range msgs[i].ToolCalls[j].ResultEvents {
-				re := &msgs[i].ToolCalls[j].ResultEvents[k]
-				if re.SubagentSessionID != "" {
-					re.SubagentSessionID = applyIDPrefixToID(
-						e.idPrefix,
-						re.SubagentSessionID,
-					)
-				}
-			}
-		}
-	}
-	return ctx.Err()
-}
-
 // toDBSession converts a pendingWrite to a db.Session.
 func toDBSession(pw pendingWrite) db.Session {
 	s, _ := toDBSessionContext(context.Background(), pw)
@@ -20522,8 +19619,7 @@ func toDBMessagesContext(
 }
 
 // toDBUsageEvents converts parser usage events for one session.
-// sessionID is the final ID after remote rewrites; parser-stamped
-// event session IDs predate the idPrefix and are ignored. It returns the
+// sessionID is the stored ID; parser-stamped event IDs are ignored. It returns the
 // fix counts from the central validation/sanitization pass so write paths
 // can surface them in the sync summary; diagnostic callers may discard.
 func toDBUsageEvents(
@@ -20614,9 +19710,6 @@ func lastParsedSourceUUID(
 func (e *Engine) FindSourceFile(ctx context.Context, sessionID string) string {
 	host, rawID := parser.StripHostPrefix(sessionID)
 	if host != "" {
-		if fp := e.db.GetSessionFilePath(ctx, sessionID); isS3SourcePath(fp) {
-			return fp
-		}
 		// Remote sessions have no local source file.
 		return ""
 	}
@@ -20677,11 +19770,6 @@ func (e *Engine) FindSourceFile(ctx context.Context, sessionID string) string {
 	// return the stored path so downstream parsing stays scoped to
 	// the requested conversation rather than the whole trace file.
 	if fp := storedPath; fp != "" {
-		// s3:// sources have no local file to stat; the path is itself
-		// the authoritative source and processFile fetches it directly.
-		if strings.HasPrefix(fp, "s3://") {
-			return fp
-		}
 		if historyPath, idx, ok := parser.ParseAiderVirtualPath(fp); ok {
 			// aider's stored "<historyPath>#<idx>" is positional: an
 			// inserted or removed earlier run shifts the index onto a
@@ -20731,7 +19819,6 @@ func (e *Engine) findProviderSourceFile(
 		Roots:          e.sources().agentDirs[def.Type],
 		Machine:        e.machine,
 		SourceMachines: e.sources().sourceMachines[def.Type],
-		PathRewriter:   e.pathRewriter,
 	})
 	source, found, err := provider.FindSource(ctx, parser.FindSourceRequest{
 		RawSessionID:       rawSessionID,
@@ -20787,7 +19874,6 @@ func (e *Engine) providerSessionSourceMtime(
 		Roots:          e.sources().agentDirs[def.Type],
 		Machine:        e.machine,
 		SourceMachines: e.sources().sourceMachines[def.Type],
-		PathRewriter:   e.pathRewriter,
 	})
 	source, found, err := provider.FindSource(ctx, parser.FindSourceRequest{
 		RawSessionID:       rawSessionID,
@@ -20901,30 +19987,6 @@ func providerOutcomeContainsSession(
 func (e *Engine) SourceMtime(ctx context.Context, sessionID string) int64 {
 	host, rawID := parser.StripHostPrefix(sessionID)
 	if host != "" {
-		if fp := e.db.GetSessionFilePath(ctx, sessionID); isS3SourcePath(fp) {
-			agent := parser.AgentType("")
-			if sess, err := e.db.GetSession(
-				ctx, sessionID,
-			); err == nil && sess != nil {
-				agent = parser.AgentType(sess.Agent)
-			}
-			if agent == "" {
-				if def, ok := parser.AgentByPrefix(sessionID); ok {
-					agent = def.Type
-				}
-			}
-			if agent == "" {
-				return 0
-			}
-			obj, err := statS3SourceObject(parser.DiscoveredFile{
-				Agent: agent,
-				Path:  fp,
-			})
-			if err != nil {
-				return 0
-			}
-			return obj.LastModified.UnixNano()
-		}
 		return 0
 	}
 
@@ -20958,16 +20020,6 @@ func (e *Engine) SourceMtime(ctx context.Context, sessionID string) int64 {
 		); mtime != 0 {
 			return mtime
 		}
-	}
-	if isS3SourcePath(path) {
-		obj, err := statS3SourceObject(parser.DiscoveredFile{
-			Agent: def.Type,
-			Path:  path,
-		})
-		if err != nil {
-			return 0
-		}
-		return obj.LastModified.UnixNano()
 	}
 
 	if def.Type == parser.AgentEvener {
@@ -21232,11 +20284,10 @@ func (e *Engine) syncSingleSessionContext(ctx context.Context, sessionID string,
 		}
 	}()
 	defer e.syncMu.Unlock()
-	e.resetS3CodexIndexCache()
 	e.resetSourceClaims()
 
 	host, _ := parser.StripHostPrefix(sessionID)
-	if host != "" && !isS3SourcePath(e.db.GetSessionFilePath(ctx, sessionID)) {
+	if host != "" {
 		return fmt.Errorf(
 			"cannot sync remote session %s locally", sessionID,
 		)
@@ -21281,10 +20332,7 @@ func (e *Engine) syncSingleSessionContext(ctx context.Context, sessionID string,
 		Agent:      agent,
 		ForceParse: true,
 	}
-	e.hydrateS3DiscoveredFile(ctx, sessionID, &file)
-	if file.Machine == "" && !isS3SourcePath(file.Path) {
-		file.Machine = e.machineForPath(file.Agent, file.Path)
-	}
+	file.Machine = e.machineForPath(file.Agent, file.Path)
 	if e.shouldCacheSkip(file) {
 		e.clearSkip(ctx, path)
 	}
@@ -21445,7 +20493,7 @@ func (e *Engine) processAndWriteSessionFile(
 			e.failures.Record(res.failureCacheKey, res.failureIdentity)
 		}
 		if res.cacheSkip && res.mtime != 0 && !res.noCacheSkip {
-			e.cacheSkip(res.skipCacheKey(path), res.mtime, res.sourceFingerprint)
+			e.cacheSkip(res.skipCacheKey(path), res.mtime)
 		}
 		return false, sessionsChanged, res.err
 	}
@@ -21521,12 +20569,11 @@ func (e *Engine) processAndWriteSessionFile(
 	// child whose edge is about to be removed must be carried into the
 	// linking batch explicitly, or it could never re-resolve to a
 	// remaining spawner until the next bulk sync.
-	excluded := e.applyIDPrefixToSessionIDs(res.excludedSessionIDs)
+	excluded := res.excludedSessionIDs
 	resultIDs := make([]string, 0, len(res.results))
 	for _, pr := range res.results {
 		resultIDs = append(resultIDs, pr.Session.ID)
 	}
-	resultIDs = e.applyIDPrefixToSessionIDs(resultIDs)
 	priorChildren, childErr := e.db.SubagentChildSessionIDs(ctx,
 		append(append([]string{}, excluded...), resultIDs...),
 	)

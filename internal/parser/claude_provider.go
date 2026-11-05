@@ -14,8 +14,7 @@ import (
 )
 
 var (
-	_ Provider   = (*claudeProvider)(nil)
-	_ S3Provider = (*claudeProvider)(nil)
+	_ Provider = (*claudeProvider)(nil)
 )
 
 type claudeProviderFactory struct {
@@ -131,24 +130,12 @@ func (p *claudeProvider) Parse(
 	}
 	machine := firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
 	project := claudeProviderProject(ctx, req.Source.ProjectHint, path)
-	var persistedOutputPathResolver func(string) (string, bool)
-	if req.StoredPathResolver != nil {
-		// Stored companions can carry a canonical machine-qualified
-		// spelling (remote mirrors) or the raw recorded path (hosted raw
-		// materializations); try both before falling back to the on-disk
-		// layout, mirroring the shared Claude-layout provider contract.
-		persistedOutputPathResolver = func(path string) (string, bool) {
-			if local, ok := req.StoredPathResolver(path); ok {
-				return local, true
-			}
-			return req.StoredPathResolver(machine + ":" + path)
-		}
-	}
+
 	opts := claudeParseOptions{
-		ctx:                         ctx,
-		siblingLineage:              claudeSourceIsProjectLevel(req.Source, path),
-		persistedOutputPathResolver: persistedOutputPathResolver,
-		aiTitleFallback:             true,
+		ctx:            ctx,
+		siblingLineage: claudeSourceIsProjectLevel(req.Source, path),
+
+		aiTitleFallback: true,
 	}
 	results, excludedIDs, err := claudeParseFile(path, project, machine, opts)
 	if err != nil {
@@ -318,7 +305,7 @@ type claudeSource struct {
 // claudeSourceIsProjectLevel reports whether a discovered local source
 // is a top-level project transcript (root/<project>/<session>.jsonl).
 // Only those participate in background-fork sibling lineage: subagent
-// transcripts, materialized s3 objects, and uploads never do.
+// transcripts and uploads never do.
 func claudeSourceIsProjectLevel(source SourceRef, path string) bool {
 	var root string
 	switch src := source.Opaque.(type) {
@@ -430,17 +417,6 @@ func (s claudeSourceSet) discoverEachRoot(
 	root string,
 	yield func(SourceRef) error,
 ) error {
-	if strings.HasPrefix(root, "s3://") {
-		for _, file := range s.spec.listFiles(root) {
-			source, ok := s.discoveredSourceRef(root, file)
-			if ok {
-				if err := yield(source); err != nil {
-					return err
-				}
-			}
-		}
-		return nil
-	}
 	return s.streamLocalRoot(ctx, root, yield)
 }
 
@@ -522,18 +498,12 @@ func (s claudeSourceSet) streamLocalSubtree(ctx context.Context, root, path stri
 func (s claudeSourceSet) discoveredSourceRef(
 	root string, file DiscoveredFile,
 ) (SourceRef, bool) {
-	if strings.HasPrefix(file.Path, "s3://") {
-		return s3SourceRefFromDiscoveredFile(root, file), true
-	}
 	return s.sourceRef(root, file.Path)
 }
 
 func (s claudeSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
 	roots := make([]WatchRoot, 0, len(s.roots))
 	for _, root := range s.roots {
-		if isS3URI(root) {
-			continue
-		}
 		roots = append(roots, WatchRoot{
 			Path:         root,
 			Recursive:    true,
@@ -672,8 +642,6 @@ func (s claudeSourceSet) pathFromSource(source SourceRef) (string, bool) {
 		if src != nil && src.Path != "" {
 			return src.Path, true
 		}
-	case MaterializedFileSource:
-		return src.Path, src.Path != ""
 	}
 	for _, candidate := range []string{
 		source.DisplayPath,
@@ -850,7 +818,6 @@ func claudeProviderCapabilities() Capabilities {
 			ForceReplaceOnParse:  CapabilitySupported,
 			VerifiedLocalStat:    CapabilitySupported,
 			MultiFileStatHash:    CapabilitySupported,
-			S3Discovery:          CapabilitySupported,
 		},
 		Content: ContentCapabilities{
 			FirstMessage:         CapabilitySupported,

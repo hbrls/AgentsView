@@ -60,13 +60,6 @@ type ProviderConfig struct {
 	// SourceMachines labels configured roots with their source machine. A
 	// provider must treat roots owned by another machine as remote metadata.
 	SourceMachines map[string]string
-	// PathRewriter maps an on-disk source path to its canonical stored form.
-	// It is non-nil only during remote sync, where source files are read
-	// from a temporary extraction directory but must keep a stable identity
-	// across syncs. Providers whose session IDs are derived from the source
-	// path (Aider) use it to seed those IDs from the canonical remote path
-	// rather than the changing temp path. Most providers ignore it.
-	PathRewriter func(string) string
 	// SQLiteContainerListsWatermarkOnly authorizes a shared SQLite container
 	// at dbPath to use its complete-membership, session/project-watermark
 	// listing for this discovery pass. The caller's container gate decides
@@ -382,13 +375,6 @@ func (b ProviderBase) ResolveReconciliationScopes(
 	return directoryReconciliationScopePlan(b.Config.Roots, req.Roots), nil
 }
 
-// isRemoteReconciliationScopeRoot mirrors the sync engine's remote-root
-// filter: remote object roots are owned by the remote sync path and resolve
-// no local reconciliation scope.
-func isRemoteReconciliationScopeRoot(root string) bool {
-	return strings.HasPrefix(strings.ToLower(root), "s3://")
-}
-
 // ValidateReconciliationScopeRoots rejects a local root that cannot become a
 // bounded proof scope. A scope proves itself by matching stored source paths
 // against a path prefix, and discovery writes those paths by joining the
@@ -404,7 +390,6 @@ func ValidateReconciliationScopeRoots(
 	for _, group := range [][]string{configuredRoots, requestedRoots} {
 		for _, root := range group {
 			if strings.TrimSpace(root) == "" ||
-				isRemoteReconciliationScopeRoot(root) ||
 				filepath.Clean(root) != "." {
 				continue
 			}
@@ -515,12 +500,6 @@ func containerAwareReconciliationScopePlan(
 		if strings.TrimSpace(root) == "" {
 			continue
 		}
-		if isRemoteReconciliationScopeRoot(root) {
-			// A remote root is never coverable by a local pass; keeping its
-			// identity required makes full-coverage authority unreachable.
-			required = append(required, root)
-			continue
-		}
 		clean := cleanReconciliationScopeRoot(root)
 		if slices.ContainsFunc(configured, func(existing configuredScopeRoot) bool {
 			return reconciliationScopeSamePath(existing.clean, clean)
@@ -549,7 +528,7 @@ func containerAwareReconciliationScopePlan(
 	}
 	var descendants []descendantScope
 	for _, raw := range requestedRoots {
-		if strings.TrimSpace(raw) == "" || isRemoteReconciliationScopeRoot(raw) {
+		if strings.TrimSpace(raw) == "" {
 			continue
 		}
 		requested := cleanReconciliationScopeRoot(raw)
@@ -1015,9 +994,6 @@ type ParseRequest struct {
 	Fingerprint SourceFingerprint
 	Machine     string
 	ForceParse  bool
-	// StoredPathResolver maps a canonical remote companion path back to the
-	// materialized file used by this parse.
-	StoredPathResolver func(string) (string, bool)
 }
 
 // ParseOutcome is the full-parse provider output. It is meaningful only when

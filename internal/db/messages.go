@@ -2119,12 +2119,6 @@ func (db *DB) replaceSessionMessages(ctx context.Context,
 			useDiff = false
 		}
 	}
-	queueGenerationBefore, queueExistedBefore, err := artifactExportGenerationTx(
-		tx, sessionID,
-	)
-	if err != nil {
-		return err
-	}
 	var pendingRecallRevocations recallEvidenceRevocationEvents
 
 	if err := reconcileConversationMessagesTx(tx, sessionID, msgs, true, db.usageOnlyStorage()); err != nil {
@@ -2177,11 +2171,6 @@ func (db *DB) replaceSessionMessages(ctx context.Context,
 		err = invalidateSessionSignalsTx(ctx, tx, sessionID)
 	}
 	if err != nil {
-		return err
-	}
-	if err := enqueueArtifactExportIfGenerationUnchangedTx(
-		tx, sessionID, queueGenerationBefore, queueExistedBefore,
-	); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -2556,12 +2545,6 @@ func (db *DB) replaceSessionContent(ctx context.Context,
 			useDiff = false
 		}
 	}
-	queueGenerationBefore, queueExistedBefore, err := artifactExportGenerationTx(
-		tx, sessionID,
-	)
-	if err != nil {
-		return err
-	}
 	var pendingRecallRevocations recallEvidenceRevocationEvents
 
 	if err := reconcileConversationMessagesTx(tx, sessionID, msgs, true, db.usageOnlyStorage()); err != nil {
@@ -2611,11 +2594,6 @@ func (db *DB) replaceSessionContent(ctx context.Context,
 	// the count cannot diverge from the findings it summarizes.
 	if err := replaceSecretFindingsTx(tx, sessionID, findings,
 		signals.SecretLeakCount, signals.SecretsRulesVersion); err != nil {
-		return err
-	}
-	if err := enqueueArtifactExportIfGenerationUnchangedTx(
-		tx, sessionID, queueGenerationBefore, queueExistedBefore,
-	); err != nil {
 		return err
 	}
 	if cp == nil || blobs == nil {

@@ -93,7 +93,7 @@ func (db *DB) ReplaceSessionUsageEvents(ctx context.Context,
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if err := replaceSessionUsageEventsTx(tx, sessionID, events, true); err != nil {
+	if err := replaceSessionUsageEventsTx(tx, sessionID, events); err != nil {
 		return err
 	}
 
@@ -108,7 +108,6 @@ func replaceSessionUsageEventsTx(
 	tx transactionQueries,
 	sessionID string,
 	events []UsageEvent,
-	enqueueArtifact bool,
 ) error {
 	if _, err := tx.Exec(
 		`DELETE FROM usage_events WHERE session_id = ?`,
@@ -164,11 +163,6 @@ func replaceSessionUsageEventsTx(
 	// an incremental push candidate (see updateSessionSignalsTx).
 	if err := bumpLocalModifiedTx(tx, sessionID, "usage replace"); err != nil {
 		return err
-	}
-	if enqueueArtifact {
-		if err := enqueueArtifactExportTx(tx, sessionID); err != nil {
-			return err
-		}
 	}
 	return nil
 }

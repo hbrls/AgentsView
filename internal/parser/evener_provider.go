@@ -22,13 +22,12 @@ func newEvenerProviderFactory(def AgentDef) ProviderFactory {
 			WithFileLookup(evenerFindFile),
 			WithFileFingerprint(evenerFingerprintSource),
 			WithFileParse(evenerFileParser(context.Background())),
-		), remote: cfg.PathRewriter != nil}
+		)}
 	})
 }
 
 type evenerSourceSet struct {
 	singleFileSourceSet
-	remote bool
 }
 
 func (s evenerSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
@@ -39,9 +38,6 @@ func (s evenerSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef)
 	for index, root := range s.roots {
 		if err := ctx.Err(); err != nil {
 			return err
-		}
-		if isS3URI(root) {
-			continue
 		}
 		err := evenerDiscoverEach(ctx, root, func(match singleFileMatch) error {
 			// Compare configured roots rather than retaining every discovered source.
@@ -63,12 +59,6 @@ func (s evenerSourceSet) SourcesForChangedPath(ctx context.Context, req ChangedP
 	sources, err := s.singleFileSourceSet.SourcesForChangedPath(ctx, req)
 	if err != nil {
 		return nil, err
-	}
-	if s.remote && (strings.HasSuffix(req.Path, evenerTranscriptSuffix) || strings.HasSuffix(req.Path, ".meta.json")) {
-		// Remote delta imports have no periodic reconciliation to revisit
-		// children when a parent transcript or its metadata changes. Returning
-		// no exact sources requests the existing provider-local fallback.
-		return nil, nil
 	}
 	return sources, nil
 }

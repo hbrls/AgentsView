@@ -1,6 +1,5 @@
 export * as ActivityService from "./activity/activity.ts";
 export * as AnalyticsService from "./analytics/analytics.ts";
-export * as ArtifactsService from "./artifacts/artifacts.ts";
 export * as AssetsService from "./assets/assets.ts";
 export * as CodexCloudService from "./codex-cloud/codex-cloud.ts";
 export * as ConfigService from "./config/config.ts";
@@ -16,7 +15,6 @@ export * as PinsService from "./pins/pins.ts";
 export * as PushService from "./push/push.ts";
 export * as RecallService from "./recall/recall.ts";
 export * as RecentEditsService from "./recent-edits/recent-edits.ts";
-export * as RemoteSyncService from "./remote-sync/remote-sync.ts";
 export * as SearchService from "./search/search.ts";
 export * as SecretsService from "./secrets/secrets.ts";
 export * as SessionsService from "./sessions/sessions.ts";

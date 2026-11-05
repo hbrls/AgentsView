@@ -692,13 +692,6 @@ func decodeCustomModelPricing(data string) (map[string]CustomModelRate, error) {
 	return decoded.CustomModelPricing, nil
 }
 
-type RemoteTransport string
-
-const (
-	RemoteTransportHTTP RemoteTransport = "http"
-	RemoteTransportSSH  RemoteTransport = "ssh"
-)
-
 type ChartPalette string
 
 const (
@@ -762,46 +755,6 @@ func (a ArchiveContent) OmitsToolContent() bool {
 // UsageOnly reports whether the archive keeps only usage accounting rows.
 func (a ArchiveContent) UsageOnly() bool {
 	return a == ArchiveContentUsage
-}
-
-// RemoteHost describes one target for config-driven `agentsview sync`
-// fan-out. An omitted Transport selects HTTP, which requires URL and Token.
-// The SSH transport takes no URL or Token and uses Destination, or Host when
-// Destination is empty, as the ssh destination. A zero/empty Interval disables
-// periodic remote sync for this host.
-//
-//nolint:recvcheck // Value encoding and pointer decoding intentionally implement distinct interfaces.
-type RemoteHost struct {
-	Host      string          `toml:"host" json:"host"`
-	Transport RemoteTransport `toml:"transport,omitempty" json:"transport,omitempty"`
-	URL       string          `toml:"url,omitempty" json:"url,omitempty"`
-	Token     string          `toml:"token,omitempty" json:"-"`
-	// Destination is the ssh destination for ssh entries. Empty means Host.
-	Destination string        `toml:"destination,omitempty" json:"destination,omitempty"`
-	Interval    time.Duration `toml:"interval,omitempty" json:"interval,omitzero"`
-}
-
-// SSHDestination returns the argument passed to ssh for this entry.
-func (h RemoteHost) SSHDestination() string {
-	if h.Destination != "" {
-		return h.Destination
-	}
-	return h.Host
-}
-
-type remoteHostJSON RemoteHost
-
-func (h RemoteHost) MarshalJSONTo(out *jsontext.Encoder) error {
-	return jsonutil.MarshalDurationFields(out, remoteHostJSON(h))
-}
-
-func (h *RemoteHost) UnmarshalJSONFrom(in *jsontext.Decoder) error {
-	var decoded remoteHostJSON
-	if err := jsonutil.UnmarshalDurationFields(in, &decoded); err != nil {
-		return err
-	}
-	*h = RemoteHost(decoded)
-	return nil
 }
 
 // SessionSource adds one agent session root with optional machine attribution.
@@ -927,12 +880,6 @@ type Config struct {
 	ModelAliases       map[string]string          `json:"model_aliases,omitempty" toml:"model_aliases"`
 	CustomModelPricing map[string]CustomModelRate `json:"custom_model_pricing,omitempty" toml:"custom_model_pricing"`
 
-	// RemoteHosts is the config-file list of remote targets that
-	// `agentsview sync` (with no --host) syncs after the local
-	// pass. CLI/config-file only; never serialized to the
-	// settings API, so there is no web-UI editing of this list.
-	RemoteHosts []RemoteHost `json:"-" toml:"-"`
-
 	// HostExplicit is true when the user passed --host on the CLI.
 	// Used to prevent auto-bind to 0.0.0.0 when the user
 	// explicitly requested a specific host.
@@ -1055,102 +1002,6 @@ func (c *Config) IsUserConfigured(
 	agent parser.AgentType,
 ) bool {
 	return c.agentDirSource[agent] != dirDefault
-}
-
-// ValidateRemoteHosts checks the configured remote_hosts entries
-// for semantic errors. It checks the trimmed values that loadFile
-// already normalized, so what is validated here is exactly what is
-// passed to remote sync. Returns an aggregated error naming every
-// offending entry, or nil when all entries are valid.
-func (c Config) ValidateRemoteHosts() error {
-	var problems []string
-	seen := make(map[string]int, len(c.RemoteHosts))
-	for i, h := range c.RemoteHosts {
-		if h.Host == "" {
-			problems = append(problems,
-				fmt.Sprintf("entry %d: host is required", i+1))
-		}
-		if h.Interval < 0 {
-			problems = append(problems,
-				fmt.Sprintf("entry %d (%q): invalid interval %s",
-					i+1, h.Host, h.Interval))
-		}
-		problems = append(problems, validateRemoteTransport(i+1, h)...)
-		// Remote sync namespaces sessions and cached state by host.
-		if h.Host != "" {
-			if first, ok := seen[h.Host]; ok {
-				problems = append(problems,
-					fmt.Sprintf("entry %d: duplicate host %q (already at entry %d)",
-						i+1, h.Host, first))
-			} else {
-				seen[h.Host] = i + 1
-			}
-		}
-	}
-	if len(problems) > 0 {
-		return fmt.Errorf("remote_hosts: %s",
-			strings.Join(problems, "; "))
-	}
-	return nil
-}
-
-func validateRemoteTransport(entry int, h RemoteHost) []string {
-	prefix := fmt.Sprintf("entry %d (%q): ", entry, h.Host)
-	var problems []string
-	switch h.Transport {
-	case "", RemoteTransportHTTP:
-		if err := validateRemoteHTTPURL(h.URL); err != nil {
-			problems = append(problems, prefix+err.Error())
-		}
-		if h.Token == "" {
-			problems = append(problems, prefix+"token is required for http")
-		}
-		if h.Destination != "" {
-			problems = append(problems, prefix+"destination is only valid for ssh")
-		}
-	case RemoteTransportSSH:
-		if h.URL != "" {
-			problems = append(problems, prefix+"url is only valid for http")
-		}
-		if h.Token != "" {
-			problems = append(problems, prefix+"token is only valid for http")
-		}
-		if strings.HasPrefix(h.SSHDestination(), "-") {
-			problems = append(problems, prefix+"destination must not start with -")
-		}
-	default:
-		problems = append(problems, fmt.Sprintf(
-			"%sinvalid transport %q; use http or ssh", prefix, h.Transport))
-	}
-	return problems
-}
-
-func validateRemoteHTTPURL(raw string) error {
-	value := strings.TrimSpace(raw)
-	if value == "" {
-		return errors.New("url is required")
-	}
-	u, err := url.Parse(value)
-	if err != nil {
-		return fmt.Errorf("invalid url: %w", err)
-	}
-	scheme := strings.ToLower(u.Scheme)
-	if scheme != "http" && scheme != "https" {
-		return errors.New("url must use http or https")
-	}
-	if u.Hostname() == "" {
-		return errors.New("url must include a host")
-	}
-	if u.User != nil {
-		return errors.New("url must not include userinfo")
-	}
-	if u.RawQuery != "" || u.ForceQuery {
-		return errors.New("url must not include query")
-	}
-	if u.Fragment != "" || u.RawFragment != "" || strings.Contains(value, "#") {
-		return errors.New("url must not include fragment")
-	}
-	return nil
 }
 
 // Default returns a Config with default values.
@@ -1685,7 +1536,6 @@ func (c *Config) applyConfigTOML(data string) error {
 		Agent                          map[string]AgentConfig `toml:"agent"`
 		EventsCoalesceInterval         time.Duration          `toml:"events_coalesce_interval"`
 		DaemonIdleTimeout              time.Duration          `toml:"daemon_idle_timeout"`
-		RemoteHosts                    []RemoteHost           `toml:"remote_hosts"`
 		SessionSources                 []sessionSourceConfig  `toml:"session_sources"`
 		ModelAliases                   map[string]string      `toml:"model_aliases"`
 	}
@@ -1953,20 +1803,6 @@ func (c *Config) applyConfigTOML(data string) error {
 	}
 	if len(customModelPricing) > 0 {
 		c.CustomModelPricing = customModelPricing
-	}
-	if len(file.RemoteHosts) > 0 {
-		hosts := make([]RemoteHost, len(file.RemoteHosts))
-		for i, h := range file.RemoteHosts {
-			hosts[i] = RemoteHost{
-				Host:        strings.TrimSpace(h.Host),
-				Transport:   RemoteTransport(strings.TrimSpace(string(h.Transport))),
-				URL:         strings.TrimSpace(h.URL),
-				Token:       strings.TrimSpace(h.Token),
-				Destination: strings.TrimSpace(h.Destination),
-				Interval:    h.Interval,
-			}
-		}
-		c.RemoteHosts = hosts
 	}
 	if meta.IsDefined("session_sources") {
 		c.sessionSourceConfigs = append([]sessionSourceConfig(nil), file.SessionSources...)
@@ -2581,12 +2417,6 @@ func (c *Config) resolveSessionSources() error {
 				fmt.Sprintf("entry %d (%s): session_sources requires a discoverable filesystem provider; %s is import-only", entry, agent, agent))
 			continue
 		}
-		rawDir := strings.TrimSpace(input.Dir)
-		if strings.HasPrefix(strings.ToLower(rawDir), "s3://") {
-			problems = append(problems,
-				fmt.Sprintf("entry %d (%s): dir %q is an S3 root; session_sources supports filesystem roots only, so configure S3 through the existing per-agent directory setting", entry, agent, input.Dir))
-			continue
-		}
 		dir, metadataDir, err := normalizeRuntimeSessionRoot(agent, input.Dir)
 		if err != nil {
 			problems = append(problems,
@@ -2645,9 +2475,6 @@ func (c *Config) resolveSessionSources() error {
 	for agent, roots := range rootsByAgent {
 		machines := make(map[string]string, len(roots))
 		for _, state := range roots {
-			if strings.HasPrefix(strings.ToLower(state.dir), "s3://") {
-				continue
-			}
 			machines[state.dir] = state.machine
 		}
 		sourceMachines[agent] = machines
@@ -2659,9 +2486,6 @@ func (c *Config) resolveSessionSources() error {
 }
 
 func sessionSourceComparisonKey(dir string) (string, error) {
-	if strings.HasPrefix(strings.ToLower(dir), "s3://") {
-		return dir, nil
-	}
 	return pathutil.LocalComparisonKey(dir)
 }
 
@@ -2669,9 +2493,6 @@ func sessionSourceComparisonKey(dir string) (string, error) {
 // absolute path is kept separately for sidecars when only its session
 // directory is linked into another home.
 func normalizeRuntimeSessionRoot(agent parser.AgentType, raw string) (dir, metadataDir string, err error) {
-	if strings.HasPrefix(strings.ToLower(raw), "s3://") {
-		return raw, "", nil
-	}
 	expanded, err := normalizeSessionSourceDir(raw)
 	if err != nil {
 		return "", "", err
@@ -2687,9 +2508,6 @@ func normalizeAgentHomeDir(raw string) (string, error) {
 	if value == "" {
 		return "", errors.New("home is required")
 	}
-	if strings.HasPrefix(strings.ToLower(value), "s3://") {
-		return "", fmt.Errorf("home %q is an S3 root; homes must be local directories, so configure S3 through the per-agent directory setting", raw)
-	}
 	return normalizeSessionSourceDir(value)
 }
 
@@ -2697,6 +2515,9 @@ func normalizeSessionSourceDir(raw string) (string, error) {
 	value := strings.TrimSpace(raw)
 	if value == "" {
 		return "", errors.New("dir is required")
+	}
+	if strings.HasPrefix(strings.ToLower(value), "s3://") {
+		return "", fmt.Errorf("dir %q must be a local filesystem directory; S3 sources are not supported", raw)
 	}
 	if strings.ContainsRune(value, '\x00') {
 		return "", fmt.Errorf("dir %q contains a NUL byte", raw)
@@ -3479,32 +3300,6 @@ func (c *Config) EnsureAuthToken() error {
 		c.AuthToken = token
 		return nil
 	})
-}
-
-// ValidateArtifactOriginID checks the persisted single-writer origin prefix.
-func ValidateArtifactOriginID(origin string) error {
-	if origin == "" {
-		return errors.New("artifact origin is required")
-	}
-	if origin != strings.TrimSpace(origin) {
-		return fmt.Errorf("invalid artifact origin %q", origin)
-	}
-	if origin == "local" {
-		return fmt.Errorf("invalid artifact origin %q", origin)
-	}
-	if strings.ContainsAny(origin, `/\`) || filepath.Base(origin) != origin {
-		return fmt.Errorf("invalid artifact origin %q", origin)
-	}
-	if strings.HasPrefix(origin, "-") || strings.HasSuffix(origin, "-") {
-		return fmt.Errorf("invalid artifact origin %q", origin)
-	}
-	for _, r := range origin {
-		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-' {
-			continue
-		}
-		return fmt.Errorf("invalid artifact origin %q", origin)
-	}
-	return nil
 }
 
 // SaveGithubToken persists the GitHub token to the config file.

@@ -31,7 +31,6 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/pricingrefresh"
 	"go.kenn.io/agentsview/internal/recall/extract"
-	"go.kenn.io/agentsview/internal/remotesync"
 	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/storage"
 	"go.kenn.io/agentsview/internal/sync"
@@ -110,8 +109,6 @@ type Server struct {
 	version               VersionInfo
 	chrome                chromeHost
 	dataDir               string
-
-	httpRemoteCleanupRegistry *remotesync.CleanupRegistry
 
 	// baseCtx, when set, is used as the base context for all
 	// incoming requests. Cancelling it causes SSE handlers to
@@ -202,8 +199,6 @@ type Server struct {
 	// telemetryCapture receives UI telemetry events; nil leaves the route unregistered.
 	telemetryCapture http.Handler
 
-	artifactExchangeRunner ArtifactExchangeRunner
-
 	ensurePricing func(context.Context, *db.DB) error
 }
 
@@ -263,7 +258,6 @@ func New(
 		engine:                    engine,
 		sessions:                  sessions,
 		mux:                       http.NewServeMux(),
-		httpRemoteCleanupRegistry: new(remotesync.CleanupRegistry),
 		insightLogDrainTimeout:    defaultInsightLogDrainTimeout,
 		insightLogStopWaitTimeout: defaultInsightLogStopWaitTimeout,
 		httpReadTimeout:           defaultHTTPReadTimeout,
@@ -385,16 +379,6 @@ func WithDataDir(dir string) Option {
 // exit and unblocking graceful shutdown.
 func WithBaseContext(ctx context.Context) Option {
 	return func(s *Server) { s.baseCtx = ctx }
-}
-
-// WithHTTPRemoteCleanupRegistry shares cleanup ownership with other HTTP sync
-// entry points in the same process, such as scheduled daemon syncs.
-func WithHTTPRemoteCleanupRegistry(registry *remotesync.CleanupRegistry) Option {
-	return func(s *Server) {
-		if registry != nil {
-			s.httpRemoteCleanupRegistry = registry
-		}
-	}
 }
 
 // WithBroadcaster wires an event broadcaster into the server so the

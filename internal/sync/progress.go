@@ -70,11 +70,10 @@ type SyncStats struct {
 	Failed        int `json:"failed"`
 	// Deferred counts provider results retained for a later retry. It is
 	// run-local completion state, not a durable or API field.
-	Deferred       int                 `json:"-"`
-	OrphanedCopied int                 `json:"orphaned_copied,omitempty"`
-	Warnings       []string            `json:"warnings,omitempty"`
-	Aborted        bool                `json:"aborted,omitempty"`
-	RebuildPhases  []RebuildPhaseStats `json:"rebuild_phases,omitempty"`
+	Deferred       int      `json:"-"`
+	OrphanedCopied int      `json:"orphaned_copied,omitempty"`
+	Warnings       []string `json:"warnings,omitempty"`
+	Aborted        bool     `json:"aborted,omitempty"`
 	// Tombstoned is the legacy protocol name for committed source-missing state
 	// changes that are not ordinary sync writes. It remains meaningful on a
 	// partially failed or aborted pass: a later retry will skip an already-marked

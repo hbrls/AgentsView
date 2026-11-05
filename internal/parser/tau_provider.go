@@ -21,13 +21,13 @@ func newTauSourceSet(cfg ProviderConfig) DirectoryJSONLSourceSet {
 		WithIncludePath(isTauSourcePath),
 		WithProjectHint(func(root, path string) string { return "" }),
 		WithSessionIDFromPath(func(root, path string) string {
-			return tauSessionIDFromPathWithRewriter(root, path, cfg.PathRewriter)
+			return tauSessionIDFromPath(root, path)
 		}),
 		WithLookupIDValid(isValidTauSessionID),
 		WithParseFile(func(ctx context.Context, path string, req ParseRequest) (
 			[]ParseResult, []string, error,
 		) {
-			return tauParseFile(ctx, path, req, cfg.PathRewriter)
+			return tauParseFile(ctx, path, req)
 		}),
 		WithForceReplace(),
 	)
@@ -42,12 +42,6 @@ func isTauSourcePath(root, path string) bool {
 }
 
 func tauSessionIDFromPath(root, path string) string {
-	return tauSessionIDFromPathWithRewriter(root, path, nil)
-}
-
-func tauSessionIDFromPathWithRewriter(
-	root, path string, pathRewriter func(string) string,
-) string {
 	name, ok := strings.CutSuffix(filepath.Base(path), ".jsonl")
 	if !ok || name == "index" {
 		return ""
@@ -57,9 +51,6 @@ func tauSessionIDFromPathWithRewriter(
 	}
 	if root == "" {
 		root = filepath.Dir(filepath.Dir(path))
-	}
-	if pathRewriter != nil {
-		root = pathRewriter(root)
 	}
 	rootHash := sha256.Sum256([]byte(filepath.Clean(root)))
 	return "default-" + hex.EncodeToString([]byte(filepath.Base(filepath.Dir(path)))) + "-" +
@@ -82,10 +73,9 @@ func isValidTauSessionID(rawID string) bool {
 
 func tauParseFile(
 	ctx context.Context, path string, req ParseRequest,
-	pathRewriter func(string) string,
 ) ([]ParseResult, []string, error) {
 	session, messages, err := parseTauSession(
-		ctx, path, req.Machine, pathRewriter,
+		ctx, path, req.Machine,
 	)
 	if err != nil {
 		return nil, nil, err

@@ -92,7 +92,7 @@ func (e *Engine) planOneChangedPath(
 		}
 		provider := factory.NewProvider(parser.ProviderConfig{
 			Roots: roots, Machine: e.machine,
-			SourceMachines: e.sources().sourceMachines[agent], PathRewriter: e.pathRewriter,
+			SourceMachines: e.sources().sourceMachines[agent],
 		})
 		watchRoots, err := e.providerChangedPathWatchRoots(ctx, agent, provider, roots)
 		if err != nil {
@@ -285,7 +285,6 @@ func (e *Engine) expandAffectedClaudeDuplicateCandidates(
 		providers[agent] = factory.NewProvider(parser.ProviderConfig{
 			Roots: roots, Machine: e.machine,
 			SourceMachines: e.sources().sourceMachines[agent],
-			PathRewriter:   e.pathRewriter,
 		})
 	}
 	if len(providers) == 0 {
@@ -312,14 +311,8 @@ func (e *Engine) expandAffectedClaudeDuplicateCandidates(
 		if sessionID == "" {
 			continue
 		}
-		idPrefix := e.idPrefix
-		if isS3SourcePath(file.Path) {
-			idPrefix = s3SessionIDPrefix(file.Machine)
-		}
-		fullID := applyIDPrefixToID(
-			idPrefix, claudeFormatArchiveSessionID(file.Agent, sessionID),
-		)
-		sessionKey := discoveredFileIDPrefix(file) + "\x00" + fullID
+		fullID := claudeFormatArchiveSessionID(file.Agent, sessionID)
+		sessionKey := fullID
 		if _, seen := seenSessions[sessionKey]; seen {
 			continue
 		}
@@ -330,16 +323,7 @@ func (e *Engine) expandAffectedClaudeDuplicateCandidates(
 			continue
 		}
 		physicalStoredPath := storedPath
-		if e.pathRewriter != nil {
-			if e.storedPathResolver == nil {
-				continue
-			}
-			var resolved bool
-			physicalStoredPath, resolved = e.storedPathResolver(storedPath)
-			if !resolved {
-				continue
-			}
-		}
+
 		if physicalStoredPath == "" {
 			continue
 		}
@@ -408,33 +392,17 @@ func (e *Engine) addPhysicalStoredSourceHints(
 	if len(scopes) == 0 {
 		return true, nil
 	}
-	if e.pathRewriter != nil {
-		for i := range scopes {
-			scopes[i].Path = e.pathRewriter(scopes[i].Path)
-		}
-	}
+
 	stored, err := e.db.ListStoredSourcePathHintsContext(
 		ctx, string(provider.Definition().Type), scopes,
 	)
 	if err != nil {
 		return false, err
 	}
-	physical := make([]string, 0, len(stored))
-	for _, storedPath := range stored {
-		if e.storedPathResolver == nil {
-			return false, nil
-		}
-		path, translated := e.storedPathResolver(storedPath)
-		if !translated {
-			return false, nil
-		}
-		normalized, normalizeErr := normalizeChangedPhysicalPath(path)
-		if normalizeErr != nil {
-			return false, normalizeErr
-		}
-		physical = append(physical, normalized)
+	if len(stored) > 0 {
+		return false, nil
 	}
-	request.StoredSourcePaths = physical
+	request.StoredSourcePaths = []string{}
 	return true, nil
 }
 
@@ -455,9 +423,7 @@ func (e *Engine) changedPathDiscoveredFile(
 		Path: path, Project: source.ProjectHint, Agent: agent,
 		ProviderSource: &sourceCopy, ProviderProcess: true,
 	}
-	if !isS3SourcePath(path) {
-		file.Machine = e.machineForProviderSource(agent, source, path)
-	}
+	file.Machine = e.machineForProviderSource(agent, source, path)
 	return file, true
 }
 
@@ -618,7 +584,7 @@ func (e *Engine) discoverChangedPathFallbackProviders(
 			return changedPathFallbackDiscovery{}, fmt.Errorf("fallback provider %s is not configured", agent)
 		}
 		provider := factory.NewProvider(parser.ProviderConfig{
-			Roots: roots, Machine: e.machine, PathRewriter: e.pathRewriter,
+			Roots: roots, Machine: e.machine,
 			SourceMachines: e.sources().sourceMachines[agent],
 		})
 		sources, err := provider.Discover(ctx)

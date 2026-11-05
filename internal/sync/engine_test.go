@@ -666,63 +666,6 @@ func TestWriteBatchResyncReplacementEmptyMachineRemainsEmpty(t *testing.T) {
 		"a rebuild must retain an empty attribution already in the replacement")
 }
 
-func TestClaudeIDFreshnessRejectsSourceMissingState(t *testing.T) {
-	database := openTestDB(t)
-	root := t.TempDir()
-	missingPath := filepath.Join(root, "missing.jsonl")
-	userDeletedPath := filepath.Join(root, "user-deleted.jsonl")
-	size := int64(4096)
-	mtime := int64(1234)
-	hash := "unchanged"
-	for _, session := range []db.Session{
-		{
-			ID: "missing", Agent: string(parser.AgentClaude), Project: "project",
-			Machine:  "local",
-			FilePath: &missingPath, FileSize: &size, FileMtime: &mtime,
-			FileHash: &hash, DataVersion: db.CurrentDataVersion(),
-		},
-		{
-			ID: "user-deleted", Agent: string(parser.AgentClaude), Project: "project",
-			Machine:  "local",
-			FilePath: &userDeletedPath, FileSize: &size, FileMtime: &mtime,
-			FileHash: &hash, DataVersion: db.CurrentDataVersion(),
-		},
-	} {
-		require.NoError(t, database.UpsertSession(t.Context(), session))
-		require.NoError(t, database.SetSessionDataVersion(t.Context(),
-			session.ID, db.CurrentDataVersion(),
-		))
-	}
-	require.NoError(t, database.BaselineActiveSessionSourcePaths(
-		t.Context(), "local", []db.SessionSourcePath{{
-			Agent: string(parser.AgentClaude), FilePath: missingPath,
-		}},
-	))
-	changed, err := database.MarkSessionSourceMissing(
-		t.Context(), "local", string(parser.AgentClaude), "missing", missingPath,
-	)
-	require.NoError(t, err)
-	require.True(t, changed)
-	require.NoError(t, database.SoftDeleteSession(t.Context(), "user-deleted"))
-	engine := &Engine{db: database}
-	info := fakeSnapshotInfo{fName: "restored.jsonl", fSize: size, fMtime: mtime}
-	storedSize, storedMtime, ok := database.GetSessionFileInfo(t.Context(), "user-deleted")
-	require.True(t, ok)
-	require.Equal(t, size, storedSize)
-	require.Equal(t, mtime, storedMtime)
-	storedHash, ok := database.GetSessionFileHash(t.Context(), "user-deleted")
-	require.True(t, ok)
-	require.Equal(t, hash, storedHash)
-	require.Equal(t, db.CurrentDataVersion(), database.GetSessionDataVersion(t.Context(), "user-deleted"))
-
-	assert.False(t, engine.shouldSkipFileWithPrefix(t.Context(),
-		"", "missing", info, hash,
-	), "a byte-identical restored source must be reparsed")
-	assert.True(t, engine.shouldSkipFileWithPrefix(t.Context(),
-		"", "user-deleted", info, hash,
-	), "ordinary user trash keeps the established freshness behavior")
-}
-
 func TestClassifyProviderChangedPathWatchRootPlanCached(t *testing.T) {
 	root := t.TempDir()
 	var watchRootsCalls atomic.Int32
@@ -7336,12 +7279,6 @@ func TestWriteBatchFailedReplacementKeepsSourceMissingSessionRetryable(t *testin
 	require.NoError(t, err)
 	assert.NotNil(t, active,
 		"a failed content replacement must not clear source-missing state")
-	info := fakeSnapshotInfo{
-		fName: filepath.Base(path), fSize: int64(len("new content")), fMtime: 2,
-	}
-	assert.False(t, e.shouldSkipFileWithPrefix(t.Context(),
-		"", "qwenpaw:retry-revival", info, "new-hash",
-	), "the failed replacement must remain eligible for an unchanged retry")
 
 	_, err = raw.ExecContext(t.Context(), "DROP TRIGGER fail_retry_revival_message")
 	require.NoError(t, err)
