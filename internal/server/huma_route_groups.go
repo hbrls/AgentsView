@@ -24,8 +24,6 @@ func (s *Server) registerTypedAPIRoutes() {
 	s.registerMetadataRoutes()
 	s.registerSyncRoutes()
 	s.registerRemoteSyncRoutes()
-	s.registerRawSyncRoutes()
-	s.registerCodexCloudRoutes()
 	s.registerPushRoutes()
 	s.registerConfigRoutes()
 	s.registerSettingsRoutes()

@@ -532,9 +532,6 @@ type EngineConfig struct {
 	// touching working directories recorded in imported transcripts. Bounded
 	// capture uses lexical metadata instead.
 	DisableFilesystemProjectDiscovery bool
-	// StableSourceSnapshots reports that configured source files are immutable
-	// for this engine. Bounded capture sets it after copying quiescent sources.
-	StableSourceSnapshots bool
 	// ArchiveContent tightens the database handle's storage policy before
 	// the engine writes. The handle is the single authority afterwards; a
 	// looser engine value never weakens a policy the handle already holds.
@@ -659,9 +656,6 @@ type Engine struct {
 	discardWritesOnCancel   bool
 	disableSignalRecompute  bool
 	disableProjectDiscovery bool
-	stableSourceSnapshots   bool
-	archiveSessionPolicy    func(context.Context, *db.Session, string) (bool, error)
-	parserExclusionPolicy   func(context.Context, []string) error
 	idPrefix                string
 	pathRewriter            func(string) string
 	storedPathResolver      func(string) (string, bool)
@@ -12228,11 +12222,10 @@ func (e *Engine) processProviderFile(
 	}
 	machine := e.machineForFile(file)
 	providerConfig := parser.ProviderConfig{
-		Roots:                 e.sources().agentDirs[file.Agent],
-		Machine:               e.machine,
-		StableSourceSnapshots: e.stableSourceSnapshots,
-		SourceMachines:        e.sources().sourceMachines[file.Agent],
-		PathRewriter:          e.pathRewriter,
+		Roots:          e.sources().agentDirs[file.Agent],
+		Machine:        e.machine,
+		SourceMachines: e.sources().sourceMachines[file.Agent],
+		PathRewriter:   e.pathRewriter,
 	}
 	provider := factory.NewProvider(providerConfig)
 

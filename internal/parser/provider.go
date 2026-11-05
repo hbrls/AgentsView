@@ -55,15 +55,8 @@ type ProviderConfig struct {
 	// MetadataDirs maps absolute transcript roots to their resolved metadata
 	// directories. Each provider interprets its own native files there.
 	MetadataDirs map[string][]string
-	// RawCaptureProjectDirs preserves registry-derived project paths when a
-	// finite backfill rebuilds providers from its saved data directories.
-	RawCaptureProjectDirs map[string]string
-	Roots                 []string
-	Machine               string
-	// StableSourceSnapshots reports that source files cannot change during
-	// parsing. Bounded capture enables it after copying quiescent transcripts
-	// so providers can classify an invalid end-of-file record as durable.
-	StableSourceSnapshots bool
+	Roots        []string
+	Machine      string
 	// SourceMachines labels configured roots with their source machine. A
 	// provider must treat roots owned by another machine as remote metadata.
 	SourceMachines map[string]string
@@ -86,7 +79,6 @@ type ProviderConfig struct {
 func (cfg ProviderConfig) Clone() ProviderConfig {
 	cfg.Roots = cfg.RootsCopy()
 	cfg.MetadataDirs = cloneMetadataDirs(cfg.MetadataDirs)
-	cfg.RawCaptureProjectDirs = maps.Clone(cfg.RawCaptureProjectDirs)
 	cfg.SourceMachines = maps.Clone(cfg.SourceMachines)
 	return cfg
 }
@@ -329,12 +321,6 @@ func (b ProviderBase) Definition() AgentDef {
 
 func (b ProviderBase) Capabilities() Capabilities {
 	return b.Caps
-}
-
-// ConfiguredRoots returns the roots after the provider's own normalization,
-// which raw capture plans report as their configured root.
-func (b ProviderBase) ConfiguredRoots() []string {
-	return slices.Clone(b.Config.Roots)
 }
 
 func (b ProviderBase) Discover(context.Context) ([]SourceRef, error) {

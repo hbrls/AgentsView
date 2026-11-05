@@ -303,53 +303,6 @@ func claudeScanUUIDs(
 	return lr.Err() == nil, nil
 }
 
-// claudeLineageCaptureSiblings returns the sibling transcripts the lineage
-// parser must be able to read for path: when path is a top-level project
-// transcript whose head is a bg-marked fork, every sibling .jsonl in the same
-// project directory whose first chain entry replays the fork's root uuid.
-// Only bg-marked forks ever trim or link, so interactive originals, subagent
-// transcripts, and unrelated conversations contribute no entries. The set is
-// exactly the candidate filter claudeResolveSiblingLineage applies, so a
-// capture generation carries every input the parser needs at replay time.
-func claudeLineageCaptureSiblings(ctx context.Context, path string) ([]string, error) {
-	self, err := claudeSniffHead(ctx, path)
-	if err != nil {
-		return nil, err
-	}
-	if !self.ok || !self.rootIsBG {
-		return nil, nil
-	}
-	dir := filepath.Dir(path)
-	dirEntries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, invalidRawCapturePlan(
-			"read Claude lineage siblings: %s", rawCaptureFilesystemError(err),
-		)
-	}
-	base := filepath.Base(path)
-	var siblings []string
-	for _, entry := range dirEntries {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		name := entry.Name()
-		if entry.IsDir() || name == base ||
-			!strings.HasSuffix(name, ".jsonl") ||
-			strings.HasPrefix(name, "agent-") {
-			continue
-		}
-		siblingPath := filepath.Join(dir, name)
-		sniff, err := claudeSniffHead(ctx, siblingPath)
-		if err != nil {
-			return nil, err
-		}
-		if sniff.ok && sniff.rootUUID == self.rootUUID {
-			siblings = append(siblings, siblingPath)
-		}
-	}
-	return siblings, nil
-}
-
 // claudeResolveSiblingLineage establishes the background-fork lineage
 // for path, or returns nil when no lineage can be positively oriented.
 // Sibling discovery is head-sniff only (memoized per size and mtime,
