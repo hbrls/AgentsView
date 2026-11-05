@@ -20,10 +20,6 @@ func newPGServiceCommand() *cobra.Command {
 	return newServiceCommands(pgServiceKind)
 }
 
-func newClickHouseServiceCommand() *cobra.Command {
-	return newServiceCommands(clickHouseServiceKind)
-}
-
 func newServiceCommands(kind serviceKind) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:          "service",

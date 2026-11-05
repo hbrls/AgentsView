@@ -28,8 +28,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/activity"
-	clickhousestore "go.kenn.io/agentsview/internal/clickhouse"
-	"go.kenn.io/agentsview/internal/clickhouse/chtest"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/money"
 	postgresstore "go.kenn.io/agentsview/internal/postgres"
@@ -430,34 +428,6 @@ func dropParitySchema(t *testing.T, pgURL string) {
 	_, _ = store.DB().Exec("DROP SCHEMA IF EXISTS " + paritySchema + " CASCADE")
 }
 
-// pushParityClickHouse pushes the SQLite fixture to a fresh ClickHouse
-// database via the production Sync and returns a read-only store. It
-// returns nil when TEST_CLICKHOUSE_URL is unset so PostgreSQL-only runs
-// do not skip.
-func pushParityClickHouse(
-	t *testing.T, ctx context.Context, local *db.DB,
-) *clickhousestore.Store {
-	t.Helper()
-	if os.Getenv("TEST_CLICKHOUSE_URL") == "" {
-		return nil
-	}
-	dsn, database := chtest.FreshDatabase(t)
-	target := clickhousestore.Target{URL: dsn, Database: database}
-	syncer, err := clickhousestore.New(
-		ctx, target, local, "parity-machine", storage.PusherOptions{},
-	)
-	require.NoError(t, err, "creating clickhouse sync")
-	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
-	res, err := syncer.Push(ctx, true, nil)
-	require.NoError(t, err, "pushing to clickhouse")
-	require.Equal(t, len(parityFixture()), res.SessionsPushed,
-		"clickhouse sessions pushed")
-	store, err := clickhousestore.NewStore(ctx, target)
-	require.NoError(t, err, "opening clickhouse store")
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	return store
-}
-
 // canonicalizeReport sorts the report's order-unspecified slices by a stable
 // key so the deep comparison is order-independent. ByProject/ByModel/ByAgent
 // are already minutes-then-key sorted by the aggregator, but resorting purely
@@ -498,11 +468,10 @@ func TestGetActivityReportParityAcrossBackends(t *testing.T) {
 	if os.Getenv("TEST_PG_URL") != "" {
 		pgStore = pushParityPostgres(t, ctx, local)
 	}
-	chStore := pushParityClickHouse(t, ctx, local)
-	if pgStore == nil && chStore == nil {
-		t.Skip("TEST_PG_URL and TEST_CLICKHOUSE_URL are unset; skipping cross-backend parity")
+	if pgStore == nil {
+		t.Skip("TEST_PG_URL is unset; skipping cross-backend parity")
 	}
-	assertCandidateParity(t, ctx, local, pgStore, chStore)
+	assertCandidateParity(t, ctx, local, pgStore)
 
 	fixedNow, err := time.Parse(time.RFC3339, "2030-01-01T00:00:00Z")
 	require.NoError(t, err, "parsing fixed now")
@@ -546,7 +515,7 @@ func TestGetActivityReportParityAcrossBackends(t *testing.T) {
 			filter := db.AnalyticsFilter{Timezone: tc.input.Timezone}
 
 			sqliteReport := assertParityForCase(t, ctx, q, filter,
-				local, pgStore, chStore)
+				local, pgStore)
 
 			if tc.name == "day-minute" {
 				assertDayMinuteFixtureSanity(t, sqliteReport)
@@ -613,9 +582,6 @@ func TestActivityReportMessageCountsAcrossBackends(t *testing.T) {
 	if os.Getenv("TEST_PG_URL") != "" {
 		stores["postgres"] = pushParityPostgres(t, ctx, local)
 	}
-	if store := pushParityClickHouse(t, ctx, local); store != nil {
-		stores["clickhouse"] = store
-	}
 	q, err := activity.ResolveQuery(activity.QueryInput{
 		Preset: "custom", Timezone: "UTC", BucketOverride: "5m",
 		From: "2026-06-14T10:00:00Z", To: "2026-06-14T10:15:00Z",
@@ -660,9 +626,8 @@ func TestGetActivityReportIncludesTerminalAfterSessionEndAcrossBackends(
 	if os.Getenv("TEST_PG_URL") != "" {
 		pgStore = pushParityPostgres(t, ctx, local)
 	}
-	chStore := pushParityClickHouse(t, ctx, local)
-	if pgStore == nil && chStore == nil {
-		t.Skip("TEST_PG_URL and TEST_CLICKHOUSE_URL are unset; skipping cross-backend parity")
+	if pgStore == nil {
+		t.Skip("TEST_PG_URL is unset; skipping cross-backend parity")
 	}
 
 	q, err := activity.ResolveQuery(activity.QueryInput{
@@ -688,14 +653,6 @@ func TestGetActivityReportIncludesTerminalAfterSessionEndAcrossBackends(
 			report activity.Report
 		}{name: "postgres", report: pgReport})
 	}
-	if chStore != nil {
-		chReport, err := chStore.GetActivityReport(ctx, filter, q)
-		require.NoError(t, err)
-		reports = append(reports, struct {
-			name   string
-			report activity.Report
-		}{name: "clickhouse", report: chReport})
-	}
 	for _, backend := range reports {
 		t.Run(backend.name, func(t *testing.T) {
 			bySession := make(map[string]activity.SessionRow,
@@ -715,7 +672,6 @@ func TestGetActivityReportIncludesTerminalAfterSessionEndAcrossBackends(
 func assertCandidateParity(
 	t *testing.T, ctx context.Context,
 	local *db.DB, pgStore *postgresstore.Store,
-	chStore *clickhousestore.Store,
 ) {
 	t.Helper()
 	q, err := activity.ResolveQuery(activity.QueryInput{
@@ -795,9 +751,6 @@ func assertCandidateParity(
 	if pgStore != nil {
 		require.Equal(t, want, collect(pgStore.ActivityReportCandidateSource(ids, q)))
 	}
-	if chStore != nil {
-		require.Equal(t, want, collect(chStore.ActivityReportCandidateSource(ids, q)))
-	}
 }
 
 // assertParityForCase queries all three backends with the resolved query and
@@ -808,7 +761,6 @@ func assertParityForCase(
 	t *testing.T, ctx context.Context, q activity.Query,
 	filter db.AnalyticsFilter,
 	local *db.DB, pgStore *postgresstore.Store,
-	chStore *clickhousestore.Store,
 ) activity.Report {
 	t.Helper()
 
@@ -825,13 +777,6 @@ func assertParityForCase(
 		canonicalizeReport(&pgReport)
 		require.Equal(t, sqliteReport, pgReport,
 			"SQLite and PostgreSQL activity reports diverge")
-	}
-	if chStore != nil {
-		chReport, err := chStore.GetActivityReport(ctx, filter, q)
-		require.NoError(t, err, "clickhouse GetActivityReport")
-		canonicalizeReport(&chReport)
-		require.Equal(t, sqliteReport, chReport,
-			"SQLite and ClickHouse activity reports diverge")
 	}
 	return sqliteReport
 }

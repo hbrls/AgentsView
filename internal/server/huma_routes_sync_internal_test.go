@@ -26,7 +26,6 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/clickhouse"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
@@ -169,7 +168,7 @@ func newSyncRouteFixture(
 		serverConfig.AgentDirs[agent] = append([]string(nil), dirs...)
 	}
 	serverOptions := []Option{
-		WithReplicas(postgres.Backend{}, clickhouse.Backend{}),
+		WithReplicas(postgres.Backend{}),
 	}
 	if cfg.broadcaster != nil {
 		serverOptions = append(serverOptions, WithBroadcaster(cfg.broadcaster))

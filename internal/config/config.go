@@ -117,55 +117,6 @@ var pgConfigKeys = map[string]struct{}{
 	"push_vectors":     {},
 }
 
-// ClickHouseConfig holds ClickHouse connection settings for push and serve.
-type ClickHouseConfig struct {
-	URL             string   `toml:"url" json:"url"`
-	Database        string   `toml:"database" json:"database"`
-	MachineName     string   `toml:"machine_name" json:"machine_name"`
-	AllowInsecure   bool     `toml:"allow_insecure" json:"allow_insecure"`
-	Projects        []string `toml:"projects" json:"projects,omitempty"`
-	ExcludeProjects []string `toml:"exclude_projects" json:"exclude_projects,omitempty"`
-	// PushVectors gates the vector phase of clickhouse push. A pointer so an
-	// omitted key keeps the default (enabled) while an explicit false opts out.
-	PushVectors *bool `toml:"push_vectors" json:"push_vectors,omitempty"`
-	// PushBatchSize sets how many sessions clickhouse push writes per batch.
-	// Each batch runs one lightweight DELETE per dependent table, so larger
-	// batches mean fewer part rewrites but more session payloads in memory
-	// at once. Nil keeps the push default.
-	PushBatchSize *int `toml:"push_batch_size" json:"push_batch_size,omitempty"`
-}
-
-// PushVectorsEnabled reports whether clickhouse push should run its vector
-// phase: on unless push_vectors = false.
-func (c ClickHouseConfig) PushVectorsEnabled() bool {
-	return c.PushVectors == nil || *c.PushVectors
-}
-
-type clickHouseEnvOverrides struct {
-	URL         string
-	Database    string
-	MachineName string
-}
-
-// ResolvedClickHouseTarget is one ClickHouse target after target selection,
-// defaulting, and default-target env overrides are applied.
-type ResolvedClickHouseTarget struct {
-	Name      string
-	Config    ClickHouseConfig
-	IsDefault bool
-}
-
-var clickHouseConfigKeys = map[string]struct{}{
-	"url":              {},
-	"database":         {},
-	"machine_name":     {},
-	"allow_insecure":   {},
-	"projects":         {},
-	"exclude_projects": {},
-	"push_vectors":     {},
-	"push_batch_size":  {},
-}
-
 // VectorConfig holds settings for the optional local semantic-search
 // vector index (embeddings + vectors.db).
 type VectorConfig struct {
@@ -1732,8 +1683,6 @@ func (c *Config) applyConfigTOML(data string) error {
 		ArchiveContent                 string                 `toml:"archive_content"`
 		DefaultPG                      string                 `toml:"default_pg"`
 		PG                             PGConfig               `toml:"pg"`
-		DefaultClickHouse              string                 `toml:"default_clickhouse"`
-		ClickHouse                     ClickHouseConfig       `toml:"clickhouse"`
 		Vector                         VectorConfig           `toml:"vector"`
 		Recall                         RecallConfig           `toml:"recall"`
 		Insights                       InsightsConfig         `toml:"insights"`
@@ -1873,9 +1822,6 @@ func (c *Config) applyConfigTOML(data string) error {
 	if meta.IsDefined("default_pg") {
 		c.DefaultPG = normalizePGTargetName(file.DefaultPG)
 	}
-	if meta.IsDefined("default_clickhouse") {
-		c.DefaultClickHouse = normalizeTargetName(file.DefaultClickHouse)
-	}
 	legacyPG, namedPG, err := parsePGConfigSection(raw["pg"])
 	if err != nil {
 		c.pgConfigErr = fmt.Errorf("pg: %w", err)
@@ -1908,43 +1854,6 @@ func (c *Config) applyConfigTOML(data string) error {
 		}
 		if legacyPG.PushVectors != nil {
 			c.PG.PushVectors = legacyPG.PushVectors
-		}
-	}
-	legacyCH, namedCH, err := parseClickHouseConfigSection(raw["clickhouse"])
-	if err != nil {
-		c.clickHouseConfigErr = fmt.Errorf("clickhouse: %w", err)
-		if _, semantic := errors.AsType[*targetValidationError](err); !semantic || c.validationScope.uses(ScopeClickHouse) {
-			return c.clickHouseConfigErr
-		}
-	}
-	if len(namedCH) > 0 {
-		c.ClickHouse = ClickHouseConfig{}
-		c.ClickHouseTargets = namedCH
-	} else {
-		c.ClickHouseTargets = nil
-		if legacyCH.URL != "" {
-			c.ClickHouse.URL = legacyCH.URL
-		}
-		if legacyCH.Database != "" {
-			c.ClickHouse.Database = legacyCH.Database
-		}
-		if legacyCH.MachineName != "" {
-			c.ClickHouse.MachineName = legacyCH.MachineName
-		}
-		if legacyCH.AllowInsecure {
-			c.ClickHouse.AllowInsecure = true
-		}
-		if legacyCH.Projects != nil {
-			c.ClickHouse.Projects = legacyCH.Projects
-		}
-		if legacyCH.ExcludeProjects != nil {
-			c.ClickHouse.ExcludeProjects = legacyCH.ExcludeProjects
-		}
-		if legacyCH.PushVectors != nil {
-			c.ClickHouse.PushVectors = legacyCH.PushVectors
-		}
-		if legacyCH.PushBatchSize != nil {
-			c.ClickHouse.PushBatchSize = legacyCH.PushBatchSize
 		}
 	}
 	if file.Vector.Enabled {
@@ -2249,15 +2158,6 @@ func (c *Config) loadEnv() {
 	}
 	if v := os.Getenv("AGENTSVIEW_PG_MACHINE"); v != "" {
 		c.pgEnvOverrides.MachineName = v
-	}
-	if v := os.Getenv("AGENTSVIEW_CLICKHOUSE_URL"); v != "" {
-		c.clickHouseEnvOverrides.URL = v
-	}
-	if v := os.Getenv("AGENTSVIEW_CLICKHOUSE_DATABASE"); v != "" {
-		c.clickHouseEnvOverrides.Database = v
-	}
-	if v := os.Getenv("AGENTSVIEW_CLICKHOUSE_MACHINE"); v != "" {
-		c.clickHouseEnvOverrides.MachineName = v
 	}
 	if v := firstEnv(
 		"AGENTSVIEW_CURSOR_ADMIN_API_KEY",
@@ -3072,12 +2972,6 @@ func parsePGConfigSection(value any) (PGConfig, map[string]PGConfig, error) {
 	)
 }
 
-func parseClickHouseConfigSection(value any) (ClickHouseConfig, map[string]ClickHouseConfig, error) {
-	return parseNamedTargetSection[ClickHouseConfig](
-		"clickhouse", "ClickHouse", value, clickHouseConfigKeys, isReservedMirrorTargetName,
-	)
-}
-
 // ResolveDataDir returns the effective data directory by applying
 // defaults and environment overrides, without reading any files.
 // Use this to determine where migration should target before
@@ -3305,188 +3199,6 @@ func (c *Config) ResolvePGTargets() ([]ResolvedPGTarget, error) {
 			return nil, err
 		}
 		targets = append(targets, ResolvedPGTarget{
-			Name:      name,
-			Config:    targetCfg,
-			IsDefault: name == defaultName,
-		})
-	}
-	return targets, nil
-}
-
-func (c *Config) DefaultClickHouseTargetName() (string, error) {
-	if c.clickHouseConfigErr != nil {
-		return "", c.clickHouseConfigErr
-	}
-	return defaultNamedTargetName(
-		"clickhouse", "default_clickhouse", c.DefaultClickHouse, c.ClickHouseTargets,
-	)
-}
-
-func (c *Config) validateClickHouseTargets() error {
-	_, err := c.DefaultClickHouseTargetName()
-	return err
-}
-
-func (c *Config) ClickHouseTargetNames() ([]string, string, error) {
-	if c.clickHouseConfigErr != nil {
-		return nil, "", c.clickHouseConfigErr
-	}
-	return namedTargetNames(
-		"clickhouse", "default_clickhouse", c.DefaultClickHouse, c.ClickHouseTargets,
-	)
-}
-
-func (c *Config) RawClickHouseTarget(name string) (ClickHouseConfig, error) {
-	if err := c.validateClickHouseTargets(); err != nil {
-		return ClickHouseConfig{}, err
-	}
-	targetName := normalizeTargetName(name)
-	if len(c.ClickHouseTargets) == 0 {
-		if targetName != "" {
-			return ClickHouseConfig{}, fmt.Errorf(
-				"clickhouse target %q is not configured; config uses a single legacy [clickhouse] block",
-				name,
-			)
-		}
-		return c.ClickHouse, nil
-	}
-	if targetName == "" {
-		var err error
-		targetName, err = c.DefaultClickHouseTargetName()
-		if err != nil {
-			return ClickHouseConfig{}, err
-		}
-	}
-	targetCfg, ok := c.ClickHouseTargets[targetName]
-	if !ok {
-		return ClickHouseConfig{}, fmt.Errorf(
-			"clickhouse target %q is not configured",
-			targetName,
-		)
-	}
-	return targetCfg, nil
-}
-
-func (c *Config) resolveClickHouseConfig(
-	name string, ch ClickHouseConfig, applyDefaultEnv bool,
-) (ClickHouseConfig, error) {
-	if ch.PushBatchSize != nil && *ch.PushBatchSize < 1 {
-		section := "[clickhouse]"
-		if name != "" {
-			section = "[clickhouse." + name + "]"
-		}
-		return ch, fmt.Errorf(
-			"%s push_batch_size must be at least 1, got %d; remove the key to use the default",
-			section, *ch.PushBatchSize,
-		)
-	}
-	if applyDefaultEnv {
-		if c.clickHouseEnvOverrides.URL != "" {
-			ch.URL = c.clickHouseEnvOverrides.URL
-		}
-		if c.clickHouseEnvOverrides.Database != "" {
-			ch.Database = c.clickHouseEnvOverrides.Database
-		}
-		if c.clickHouseEnvOverrides.MachineName != "" {
-			ch.MachineName = c.clickHouseEnvOverrides.MachineName
-		}
-	}
-	if ch.URL != "" {
-		expanded, err := expandBracedEnv(ch.URL)
-		if err != nil {
-			return ch, fmt.Errorf("expanding url: %w", err)
-		}
-		ch.URL = expanded
-	}
-	if ch.Database == "" {
-		if name := clickHouseURLDatabase(ch.URL); name != "" {
-			ch.Database = name
-		} else {
-			ch.Database = "agentsview"
-		}
-	}
-	if ch.MachineName == "" {
-		ch.MachineName = c.InstallationID
-	}
-	return ch, nil
-}
-
-// clickHouseURLDatabase returns the database name from a clickhouse-go DSN
-// path, or empty when the URL has no path.
-func clickHouseURLDatabase(raw string) string {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return ""
-	}
-	name := strings.Trim(u.Path, "/")
-	if i := strings.IndexByte(name, '/'); i >= 0 {
-		name = name[:i]
-	}
-	return name
-}
-
-func (c *Config) ResolveClickHouse() (ClickHouseConfig, error) {
-	return c.ResolveClickHouseTarget("")
-}
-
-func (c *Config) ResolveClickHouseTarget(name string) (ClickHouseConfig, error) {
-	if err := c.validateClickHouseTargets(); err != nil {
-		return ClickHouseConfig{}, err
-	}
-	targetName := normalizeTargetName(name)
-	if len(c.ClickHouseTargets) == 0 {
-		if targetName != "" {
-			return ClickHouseConfig{}, fmt.Errorf(
-				"clickhouse target %q is not configured; config uses a single legacy [clickhouse] block",
-				name,
-			)
-		}
-		return c.resolveClickHouseConfig("", c.ClickHouse, true)
-	}
-	defaultName, err := c.DefaultClickHouseTargetName()
-	if err != nil {
-		return ClickHouseConfig{}, err
-	}
-	if targetName == "" {
-		targetName = defaultName
-	}
-	targetCfg, ok := c.ClickHouseTargets[targetName]
-	if !ok {
-		return ClickHouseConfig{}, fmt.Errorf(
-			"clickhouse target %q is not configured",
-			targetName,
-		)
-	}
-	return c.resolveClickHouseConfig(targetName, targetCfg, targetName == defaultName)
-}
-
-func (c *Config) ResolveClickHouseTargets() ([]ResolvedClickHouseTarget, error) {
-	if err := c.validateClickHouseTargets(); err != nil {
-		return nil, err
-	}
-	if len(c.ClickHouseTargets) == 0 {
-		ch, err := c.resolveClickHouseConfig("", c.ClickHouse, true)
-		if err != nil {
-			return nil, err
-		}
-		return []ResolvedClickHouseTarget{{
-			Config:    ch,
-			IsDefault: true,
-		}}, nil
-	}
-	names, defaultName, err := c.ClickHouseTargetNames()
-	if err != nil {
-		return nil, err
-	}
-	targets := make([]ResolvedClickHouseTarget, 0, len(names))
-	for _, name := range names {
-		targetCfg, err := c.resolveClickHouseConfig(
-			name, c.ClickHouseTargets[name], name == defaultName,
-		)
-		if err != nil {
-			return nil, err
-		}
-		targets = append(targets, ResolvedClickHouseTarget{
 			Name:      name,
 			Config:    targetCfg,
 			IsDefault: name == defaultName,
