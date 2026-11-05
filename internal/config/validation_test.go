@@ -35,45 +35,6 @@ func TestScopedLoadersValidateUsedSections(t *testing.T) {
 	}
 }
 
-func TestScopedRemoteErrorsCannotFallBackToDefaults(t *testing.T) {
-	unsetDeploymentEnv(t)
-	t.Setenv("AGENTSVIEW_PG_URL", "postgres://db.example/override")
-	t.Setenv("AGENTSVIEW_CLICKHOUSE_URL", "clickhouse://db.example/override")
-	dir := setupTestEnv(t)
-	writeConfig(t, dir, map[string]any{
-		"pg":         map[string]any{"all": map[string]any{"url": "postgres://db.example/archive"}},
-		"clickhouse": map[string]any{"all": map[string]any{"url": "clickhouse://db.example/archive"}},
-	})
-	cfg, err := LoadMinimalFor(ScopeLocal)
-	require.NoError(t, err)
-	_, err = cfg.ResolvePG()
-	require.ErrorContains(t, err, "reserved")
-	_, err = cfg.ResolveClickHouse()
-	require.ErrorContains(t, err, "reserved")
-	_, _, err = cfg.PGTargetNames()
-	require.ErrorContains(t, err, "reserved")
-	_, _, err = cfg.ClickHouseTargetNames()
-	require.ErrorContains(t, err, "reserved")
-	_, err = cfg.DefaultPGTargetName()
-	require.ErrorContains(t, err, "reserved")
-	_, err = cfg.DefaultClickHouseTargetName()
-	require.ErrorContains(t, err, "reserved")
-	_, err = cfg.ResolvePGTargets()
-	require.ErrorContains(t, err, "reserved")
-	_, err = cfg.ResolveClickHouseTargets()
-	require.ErrorContains(t, err, "reserved")
-	for _, name := range []string{"", "other"} {
-		_, err = cfg.RawPGTarget(name)
-		require.ErrorContains(t, err, "reserved")
-		_, err = cfg.RawClickHouseTarget(name)
-		require.ErrorContains(t, err, "reserved")
-		_, err = cfg.ResolvePGTarget(name)
-		require.ErrorContains(t, err, "reserved")
-		_, err = cfg.ResolveClickHouseTarget(name)
-		assert.ErrorContains(t, err, "reserved")
-	}
-}
-
 func TestScopedLoadersIgnoreUnusedDeploymentEnvironment(t *testing.T) {
 	unsetDeploymentEnv(t)
 	setupTestEnv(t)
@@ -94,36 +55,6 @@ func TestScopedLoadersIgnoreUnusedDeploymentEnvironment(t *testing.T) {
 	require.ErrorContains(t, err, "AGENTSVIEW_MODE")
 }
 
-func TestScopedPGConnectionDeploymentOverride(t *testing.T) {
-	for name, load := range map[string]func() (Config, error){
-		"minimal":  func() (Config, error) { return LoadMinimalFor(ScopePG) },
-		"readonly": func() (Config, error) { return LoadReadOnlyFor(ScopeLocal) },
-		"flags": func() (Config, error) {
-			return LoadPFlagsFor(pflag.NewFlagSet("test", pflag.ContinueOnError), ScopeLocal)
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			unsetDeploymentEnv(t)
-			dir := setupTestEnv(t)
-			writeConfig(t, dir, map[string]any{"pg": map[string]any{"url": "postgres://db.example/archive"}})
-			t.Setenv("AGENTSVIEW_MODE", "serve")
-			t.Setenv("AGENTSVIEW_AUTH_TOKEN_FILE", filepath.Join(dir, "missing-token"))
-			for _, value := range []string{"true", "false", "invalid"} {
-				t.Setenv("AGENTSVIEW_PG_ALLOW_INSECURE", value)
-				cfg, err := load()
-				require.NoError(t, err, "loading must not read unrelated deployment token files")
-				pg, err := cfg.ResolvePG()
-				if value == "invalid" {
-					require.ErrorContains(t, err, "AGENTSVIEW_PG_ALLOW_INSECURE must be a boolean")
-				} else {
-					require.NoError(t, err)
-					assert.Equal(t, value == "true", pg.AllowInsecure)
-				}
-			}
-		})
-	}
-}
-
 // A mistyped AGENTSVIEW_MODE makes serve refuse to start. Other commands must
 // not apply deployment secrets or the PG insecure override under it: a reader
 // reports the mode once one of its variables is set, and is a no-op otherwise.
@@ -139,18 +70,6 @@ func TestInvalidDeploymentModeAppliesNoDeploymentSettings(t *testing.T) {
 		{name: "auth token file", env: "AGENTSVIEW_AUTH_TOKEN_FILE", value: "deployment-secret", apply: func(cfg *Config) (bool, error) {
 			err := cfg.ApplyDeploymentAuth()
 			return cfg.AuthToken != "", err
-		}},
-		{name: "embeddings", env: "AGENTSVIEW_EMBEDDINGS_ENDPOINT", value: "http://127.0.0.1:30000/v1", apply: func(cfg *Config) (bool, error) {
-			err := cfg.ApplyDeploymentEmbeddings()
-			return cfg.DeploymentEmbeddings != nil, err
-		}},
-		{name: "pg allow insecure", env: "AGENTSVIEW_PG_ALLOW_INSECURE", value: "true", apply: func(cfg *Config) (bool, error) {
-			pg, err := cfg.ResolvePG()
-			return pg.AllowInsecure, err
-		}},
-		{name: "hosted raw auth policy", env: "AGENTSVIEW_REQUIRE_AUTH", value: "false", validate: func(cfg *Config) error {
-			// Applying false would fail with the auth requirement instead.
-			return cfg.ValidatePGRawDerivation(PGConfig{Schema: "tenant_schema", RawTenant: "tenant"})
 		}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -177,56 +96,6 @@ func TestInvalidDeploymentModeAppliesNoDeploymentSettings(t *testing.T) {
 			}
 			t.Setenv(tt.env, value)
 			require.ErrorContains(t, check(), `AGENTSVIEW_MODE must be "serve" or "pg-serve", got "srve"`)
-		})
-	}
-}
-
-func TestScopedPGRawDeploymentPolicy(t *testing.T) {
-	for _, tt := range []struct {
-		name, env, want string
-		configured      bool
-		hosted          bool
-	}{
-		{"enabled", "true", "", false, true},
-		{"disabled overrides file", "false", "requires authentication", true, true},
-		{"invalid policy", "invalid", "AGENTSVIEW_REQUIRE_AUTH must be a boolean", true, true},
-		{"unused policy", "invalid", "", false, false},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			unsetDeploymentEnv(t)
-			t.Setenv("AGENTSVIEW_MODE", "serve")
-			t.Setenv("AGENTSVIEW_REQUIRE_AUTH", tt.env)
-			t.Setenv("AGENTSVIEW_AUTH_TOKEN_FILE", filepath.Join(t.TempDir(), "missing-token"))
-			pg := PGConfig{Schema: "tenant_schema"}
-			if tt.hosted {
-				pg.RawTenant = "tenant"
-			}
-			cfg := Config{RequireAuth: tt.configured}
-			err := cfg.ValidatePGRawDerivation(pg)
-			if tt.want == "" {
-				require.NoError(t, err)
-			} else {
-				require.ErrorContains(t, err, tt.want)
-			}
-		})
-	}
-}
-
-func TestScopedTargetLayoutCannotHideParseErrors(t *testing.T) {
-	for _, data := range []string{
-		"[pg.all]\nurl=123",
-		"[clickhouse.all]\nurl=123",
-		"[pg.'']\nurl=123",
-		"[pg.Primary]\nurl='postgres://db.example/archive'\n[pg.primary]\nurl=123",
-		"[pg]\nurl=123\n[pg.primary]\nurl='postgres://db.example/archive'",
-		"[pg]\nunknown_key=true\n[pg.all]\nurl='postgres://db.example/archive'",
-	} {
-		t.Run(data, func(t *testing.T) {
-			unsetDeploymentEnv(t)
-			dir := setupTestEnv(t)
-			require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte(data), 0o600))
-			_, err := LoadMinimalFor(ScopeLocal)
-			require.Error(t, err, "parse errors must remain global even in an invalid unused target")
 		})
 	}
 }

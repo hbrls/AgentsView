@@ -18,13 +18,8 @@ import (
 )
 
 var (
-	_ Provider                          = (*codexProvider)(nil)
-	_ ActivityHintProvider              = (*codexProvider)(nil)
-	_ S3Provider                        = (*codexProvider)(nil)
-	_ RawCaptureProvider                = (*codexProvider)(nil)
-	_ RawCaptureSourceProvider          = (*codexProvider)(nil)
-	_ StreamingRawCaptureSourceProvider = (*codexProvider)(nil)
-	_ ReconciliationSourceResolver      = (*codexProvider)(nil)
+	_ Provider             = (*codexProvider)(nil)
+	_ ActivityHintProvider = (*codexProvider)(nil)
 )
 
 // codexProviderSpec parameterizes the one shared Codex-format provider
@@ -349,9 +344,6 @@ func (p *codexProvider) Parse(
 		return ParseOutcome{}, err
 	}
 	// Materialized roots are removed before the engine batch completes.
-	if _, materialized := req.Source.Opaque.(MaterializedFileSource); materialized {
-		ctx = context.WithValue(ctx, codexThreadInventoryContextKey{}, (*codexThreadInventoryBatch)(nil))
-	}
 	path, ok := p.sources.pathFromSource(req.Source)
 	if !ok {
 		return ParseOutcome{}, errors.New("codex source path unavailable")
@@ -428,10 +420,6 @@ func ParseCodexSessionStreaming(
 	source SourceRef,
 	sink CodexSessionSink,
 ) (*ParsedSession, []ParsedMessage, []byte, []byte, string, string, error) {
-	// Materialized roots disappear before the enclosing sync batch completes.
-	if _, materialized := source.Opaque.(MaterializedFileSource); materialized {
-		ctx = context.WithValue(ctx, codexThreadInventoryContextKey{}, (*codexThreadInventoryBatch)(nil))
-	}
 	provider, ok := NewProvider(AgentCodex, cfg)
 	if !ok {
 		return nil, nil, nil, nil, "", "",
@@ -1129,9 +1117,6 @@ func (s codexSourceSet) preferredKnownRolloutSource(
 	for _, root := range s.roots {
 		if err := ctx.Err(); err != nil {
 			return SourceRef{}, err
-		}
-		if isS3URI(root) {
-			continue
 		}
 		for _, relative := range relativePaths {
 			for _, suffix := range []string{"", ".zst"} {

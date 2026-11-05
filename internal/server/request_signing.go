@@ -5,9 +5,7 @@ import (
 	"crypto/hmac"
 	"errors"
 	"net/http"
-	"net/url"
 	"strings"
-	"time"
 
 	"go.kenn.io/agentsview/internal/requestsign"
 	"go.kenn.io/agentsview/internal/service"
@@ -16,11 +14,6 @@ import (
 func restrictedIngress(ctx context.Context) bool {
 	value, _ := ctx.Value(ctxKeyRestrictedIngress).(bool)
 	return value
-}
-
-func restrictedIngressPrefix(ctx context.Context) string {
-	prefix, _ := ctx.Value(ctxKeyRestrictedIngressPrefix).(string)
-	return prefix
 }
 
 func (s *Server) validateRestrictedPolicyAuth(policy requestsign.Policy) error {
@@ -74,27 +67,15 @@ func (s *Server) RestrictedHandler(policyFile string) (http.Handler, func() erro
 		_ = replay.Close()
 		return nil, nil, err
 	}
-	externalPrefix := externalSigningPrefix(policy.ExternalURL)
 	authenticate := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ctx := context.WithValue(r.Context(), ctxKeyRestrictedIngress, true)
-			ctx = context.WithValue(ctx, ctxKeyRestrictedIngressPrefix, externalPrefix)
 			s.authMiddlewareRequired(next, true).ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 	authorize := func(key requestsign.Key, r *http.Request) bool {
 		if !restrictedOperation(key.Grant, r.Method, r.URL.Path) {
 			return false
-		}
-		if key.Grant == "contributor" {
-			identity, err := rawSyncIdentityFromContext(r.Context())
-			if err != nil || identity.DeviceID != key.DeviceID {
-				return false
-			}
-			ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-			defer cancel()
-			current, err := s.authenticateRawSyncRequest(r.WithContext(ctx))
-			return err == nil && current.DeviceID == identity.DeviceID && current.TenantID == identity.TenantID
 		}
 		s.mu.RLock()
 		token := s.cfg.AuthToken
@@ -113,25 +94,7 @@ func (s *Server) RestrictedHandler(policyFile string) (http.Handler, func() erro
 	return s.idle.Wrap(verifier.Wrap(dispatch, authenticate, authorize)), replay.Close, nil
 }
 
-func externalSigningPrefix(base string) string {
-	// base is a validated HTTPS URL; keep every segment in its configured path.
-	externalURL, err := url.Parse(base)
-	if err != nil {
-		return ""
-	}
-	return strings.TrimRight(externalURL.Path, "/")
-}
-
 func restrictedOperation(grant, method, path string) bool {
-	if grant == "contributor" {
-		switch path {
-		case "/api/v1/raw-sync/tokens", "/api/v1/raw-sync/objects/missing", "/api/v1/raw-sync/manifests", "/api/v1/raw-sync/uploads":
-			return method == http.MethodPost
-		case "/api/v1/raw-sync/status", "/api/v1/raw-sync/health":
-			return method == http.MethodGet
-		}
-		return isRawSyncUploadPath(path) && path != "/api/v1/raw-sync/uploads" && (method == http.MethodPatch || method == http.MethodHead)
-	}
 	if grant != "reader" {
 		return false
 	}

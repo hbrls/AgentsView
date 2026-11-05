@@ -1997,7 +1997,7 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 			// A writer may leave its final JSON record incomplete while the
 			// session is live. Count terminated malformed records, and count an
 			// unterminated tail only when the caller owns a stable snapshot.
-			if lr.terminated || p.Config.StableSourceSnapshots {
+			if lr.terminated {
 				malformedLines++
 			}
 			continue

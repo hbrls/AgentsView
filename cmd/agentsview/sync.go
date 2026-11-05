@@ -45,9 +45,6 @@ func runSync(cfg SyncConfig) {
 // db close) so runSync can translate the result into a non-zero
 // exit code without skipping that cleanup.
 func doSync(cfg SyncConfig) (hadRemoteFailures bool) {
-	if err := validateArtifactSyncConfig(cfg); err != nil {
-		fatal("%v", err)
-	}
 	appCfg, err := config.LoadMinimalFor(config.ScopeLocal)
 	if err != nil {
 		log.Fatalf("loading config: %v", err)

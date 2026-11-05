@@ -141,6 +141,7 @@ type AgentDef struct {
 	// live outside the session tree, such as Codex's
 	// session_index.jsonl. Nil for agents with no such files.
 	ShallowWatchRootsFunc func(string) []string
+	DataDirRoot           string
 }
 
 type UsageCapabilities struct {
@@ -652,12 +653,11 @@ var Registry = []AgentDef{
 		FileBased:         true,
 	},
 	{
-		Type:                   AgentCodexCloud,
-		DisplayName:            "Codex Cloud",
-		IDPrefix:               "codex-cloud:",
-		FileBased:              true,
-		DataDirRoot:            "sources/codex-cloud",
-		RemoteHostSyncExcluded: true,
+		Type:        AgentCodexCloud,
+		DisplayName: "Codex Cloud",
+		IDPrefix:    "codex-cloud:",
+		FileBased:   true,
+		DataDirRoot: "sources/codex-cloud",
 	},
 	{
 		Type:        AgentOpenClaw,

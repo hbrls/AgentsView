@@ -1250,17 +1250,6 @@ machine = "archivebox"
 		cfg.SourceMachines[parser.AgentCopilot][absoluteTestPath(t, "/sessions/from-archive")])
 }
 
-func TestLoadFileSessionSourcesPreserveLegacyS3Roots(t *testing.T) {
-	cfg := loadMinimalWithConfig(t, map[string]any{
-		"claude_project_dirs": []string{"s3://session-archive/claude"},
-	})
-
-	assert.Equal(t, []string{"s3://session-archive/claude"},
-		cfg.ResolveDirs(parser.AgentClaude))
-	assert.NotContains(t, cfg.SourceMachines[parser.AgentClaude],
-		"s3://session-archive/claude")
-}
-
 func TestLoadFileSessionSourceDefaultsMachineToInstallationID(t *testing.T) {
 	cfg := loadMinimalWithConfig(t, map[string]any{
 		"session_sources": []map[string]any{{
@@ -1337,16 +1326,6 @@ agent = "claude-ai"
 dir = "/sessions/archive"
 `,
 			wantErr: "entry 1 (claude-ai): session_sources requires a discoverable filesystem provider; claude-ai is import-only",
-		},
-		{
-			name: "s3 root",
-			config: `
-[[session_sources]]
-agent = "copilot"
-dir = "s3://session-archive/copilot"
-machine = "buildbox"
-`,
-			wantErr: "session_sources supports filesystem roots only",
 		},
 	}
 

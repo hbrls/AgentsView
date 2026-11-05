@@ -44,6 +44,14 @@ type syncInput struct {
 	StartupOnly bool `query:"startup_only" default:"false" doc:"Complete deferred startup ingestion without repeating a completed startup sync"`
 }
 
+func syncErrorPayload(err error) map[string]string {
+	payload := map[string]string{"error": err.Error()}
+	if errors.Is(err, syncpkg.ErrSyncInProgress) {
+		payload["code"] = "sync_running"
+	}
+	return payload
+}
+
 func requireProcessingComplete(stats syncpkg.SyncStats) error {
 	if stats.ProcessingComplete() {
 		return nil

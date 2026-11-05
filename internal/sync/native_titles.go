@@ -155,7 +155,7 @@ func (e *Engine) applyNativeStoreTitles(ctx context.Context, source nativeTitleS
 	if len(titles) == 0 {
 		return 0, nil
 	}
-	prefix := e.idPrefix + string(source.agent) + ":"
+	prefix := string(source.agent) + ":"
 	ids := make([]string, 0, len(titles))
 	for id := range maps.Keys(titles) {
 		ids = append(ids, prefix+id)
@@ -212,16 +212,6 @@ func (e *Engine) applyNativeStoreTitles(ctx context.Context, source nativeTitleS
 // nativeRootOwns keeps a store from renaming a same-ID session that
 // belongs to another configured root.
 func (e *Engine) nativeRootOwns(source nativeTitleSource, root, storedPath string) bool {
-	if e.pathRewriter != nil {
-		if e.storedPathResolver == nil {
-			return false
-		}
-		resolved, ok := e.storedPathResolver(storedPath)
-		if !ok {
-			return false
-		}
-		storedPath = resolved
-	}
 	owner, ok := source.sessionRoot(storedPath)
 	return ok && sameReconciliationSourcePath(owner, root)
 }

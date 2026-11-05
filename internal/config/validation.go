@@ -53,8 +53,6 @@ func (c *Config) validateSections() error {
 		{ScopeVector, "[vector]", c.Vector.Validate},
 		{ScopeRecall, "[recall.extract]", c.Recall.Extract.Validate},
 		{ScopeInsights, "[insights]", c.Insights.Validate},
-		{ScopePG, "[pg]", func() error { return c.pgConfigErr }},
-		{ScopeClickHouse, "[clickhouse]", func() error { return c.clickHouseConfigErr }},
 	} {
 		if err := c.validateSection(section.scope, section.name, section.validate); err != nil {
 			return err

@@ -530,6 +530,10 @@ func clearCopiedSelfParents(
 	return nil
 }
 
+const codexRevertPageDataVersion = 131
+const codexLegacyPageHeaderDataVersion = 134
+const codexThreadIdentityDataVersion = 137
+
 // CopyExcludedSessionsFrom copies the excluded_sessions table
 // from the source DB so permanently deleted sessions survive
 // full DB rebuilds. The source must not have active connections.

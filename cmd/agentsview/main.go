@@ -277,11 +277,8 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		// The engine disables every provider for an archive-only database and
 		// carries stored sessions forward without accessing receiving-host roots.
 		preserve := sync.NewEngine(ctx, database, sync.EngineConfig{Ephemeral: true, ArchiveContent: cfg.ArchiveContent})
-		stats, err := preserve.ResyncAllWithOptions(ctx, nil, sync.RebuildOptions{})
+		stats := preserve.ResyncAll(ctx, nil)
 		preserve.Close()
-		if err != nil {
-			fatal("preserving archive after parser upgrade: %v", err)
-		}
 		if !stats.ArchiveRebuilt {
 			fatal("preserving archive after parser upgrade: rebuild aborted")
 		}
@@ -3018,15 +3015,6 @@ func startPeriodicSync(
 	idleTracker *server.IdleTracker,
 	emitter sync.Emitter,
 ) {
-	if validRemotes {
-		for _, rh := range cfg.RemoteHosts {
-			if rh.Interval > 0 {
-				go startRemoteHostSync(
-					ctx, cfg, database, engine, rh, emitter, idleTracker,
-				)
-			}
-		}
-	}
 
 	ticker := time.NewTicker(periodicSyncInterval)
 	defer ticker.Stop()

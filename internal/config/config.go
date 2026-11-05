@@ -730,44 +730,38 @@ type sessionSourceConfig struct {
 type Config struct {
 	// CodexCloud is the [agents.codex-cloud] table, read from config.toml
 	// only.
-	CodexCloud           CodexCloudConfig            `json:"-" toml:"-"`
-	Host                 string                      `json:"host" toml:"host"`
-	Port                 int                         `json:"port" toml:"port"`
-	ChartPalette         ChartPalette                `json:"chart_palette" toml:"chart_palette"`
-	ZoomLevel            *ZoomLevel                  `json:"zoom_level,omitempty" toml:"zoom_level,omitempty"`
-	DataDir              string                      `json:"data_dir" toml:"data_dir"`
-	DBPath               string                      `json:"-" toml:"-"`
-	PublicURL            string                      `json:"public_url,omitempty" toml:"public_url"`
-	PublicOrigins        []string                    `json:"public_origins,omitempty" toml:"public_origins"`
-	Proxy                ProxyConfig                 `json:"proxy,omitempty" toml:"proxy"`
-	WatchExcludePatterns []string                    `json:"watch_exclude_patterns,omitempty" toml:"watch_exclude_patterns"`
-	DisabledAgents       []parser.AgentType          `json:"disabled_agents,omitempty" toml:"disabled_agents"`
-	CursorSecret         string                      `json:"cursor_secret" toml:"cursor_secret"`
-	CursorAdminAPIKey    string                      `json:"cursor_admin_api_key,omitempty" toml:"cursor_admin_api_key"`
-	CursorAdminEmail     string                      `json:"cursor_admin_email,omitempty" toml:"cursor_admin_email"`
-	CursorAdminUserID    string                      `json:"cursor_admin_user_id,omitempty" toml:"cursor_admin_user_id"`
-	GithubToken          string                      `json:"github_token,omitempty" toml:"github_token"`
-	Terminal             TerminalConfig              `json:"terminal,omitempty" toml:"terminal"`
-	AuthToken            string                      `json:"auth_token,omitempty" toml:"auth_token"`
-	RequireAuth          bool                        `json:"require_auth" toml:"require_auth"`
-	NoBrowser            bool                        `json:"no_browser" toml:"no_browser"`
-	DisableUpdateCheck   bool                        `json:"disable_update_check" toml:"disable_update_check"`
-	NoSync               bool                        `json:"-" toml:"-"`
-	SkipInitialSync      bool                        `json:"-" toml:"-"`
-	ArchiveContent       ArchiveContent              `json:"archive_content" toml:"archive_content"`
-	PG                   PGConfig                    `json:"pg,omitempty" toml:"pg"`
-	DefaultPG            string                      `json:"default_pg,omitempty" toml:"default_pg"`
-	PGTargets            map[string]PGConfig         `json:"-" toml:"-"`
-	ClickHouse           ClickHouseConfig            `json:"clickhouse,omitempty" toml:"clickhouse"`
-	DefaultClickHouse    string                      `json:"default_clickhouse,omitempty" toml:"default_clickhouse"`
-	ClickHouseTargets    map[string]ClickHouseConfig `json:"-" toml:"-"`
-	Vector               VectorConfig                `json:"vector,omitempty" toml:"vector"`
-	Recall               RecallConfig                `json:"recall,omitempty" toml:"recall"`
-	Insights             InsightsConfig              `json:"insights,omitempty" toml:"insights"`
-	Friction             FrictionConfig              `json:"friction,omitempty" toml:"friction"`
-	Automated            AutomatedConfig             `json:"automated,omitempty" toml:"automated"`
-	Agent                map[string]AgentConfig      `json:"agent,omitempty" toml:"agent"`
-	WriteTimeout         time.Duration               `json:"-" toml:"-"`
+	CodexCloud           CodexCloudConfig       `json:"-" toml:"-"`
+	Host                 string                 `json:"host" toml:"host"`
+	Port                 int                    `json:"port" toml:"port"`
+	ChartPalette         ChartPalette           `json:"chart_palette" toml:"chart_palette"`
+	ZoomLevel            *ZoomLevel             `json:"zoom_level,omitempty" toml:"zoom_level,omitempty"`
+	DataDir              string                 `json:"data_dir" toml:"data_dir"`
+	DBPath               string                 `json:"-" toml:"-"`
+	PublicURL            string                 `json:"public_url,omitempty" toml:"public_url"`
+	PublicOrigins        []string               `json:"public_origins,omitempty" toml:"public_origins"`
+	Proxy                ProxyConfig            `json:"proxy,omitempty" toml:"proxy"`
+	WatchExcludePatterns []string               `json:"watch_exclude_patterns,omitempty" toml:"watch_exclude_patterns"`
+	DisabledAgents       []parser.AgentType     `json:"disabled_agents,omitempty" toml:"disabled_agents"`
+	CursorSecret         string                 `json:"cursor_secret" toml:"cursor_secret"`
+	CursorAdminAPIKey    string                 `json:"cursor_admin_api_key,omitempty" toml:"cursor_admin_api_key"`
+	CursorAdminEmail     string                 `json:"cursor_admin_email,omitempty" toml:"cursor_admin_email"`
+	CursorAdminUserID    string                 `json:"cursor_admin_user_id,omitempty" toml:"cursor_admin_user_id"`
+	GithubToken          string                 `json:"github_token,omitempty" toml:"github_token"`
+	Terminal             TerminalConfig         `json:"terminal,omitempty" toml:"terminal"`
+	AuthToken            string                 `json:"auth_token,omitempty" toml:"auth_token"`
+	RequireAuth          bool                   `json:"require_auth" toml:"require_auth"`
+	NoBrowser            bool                   `json:"no_browser" toml:"no_browser"`
+	DisableUpdateCheck   bool                   `json:"disable_update_check" toml:"disable_update_check"`
+	NoSync               bool                   `json:"-" toml:"-"`
+	SkipInitialSync      bool                   `json:"-" toml:"-"`
+	ArchiveContent       ArchiveContent         `json:"archive_content" toml:"archive_content"`
+	Vector               VectorConfig           `json:"vector,omitempty" toml:"vector"`
+	Recall               RecallConfig           `json:"recall,omitempty" toml:"recall"`
+	Insights             InsightsConfig         `json:"insights,omitempty" toml:"insights"`
+	Friction             FrictionConfig         `json:"friction,omitempty" toml:"friction"`
+	Automated            AutomatedConfig        `json:"automated,omitempty" toml:"automated"`
+	Agent                map[string]AgentConfig `json:"agent,omitempty" toml:"agent"`
+	WriteTimeout         time.Duration          `json:"-" toml:"-"`
 	// InstallationID identifies this data directory independently of its label.
 	InstallationID string `json:"-" toml:"-"`
 	// InstallationCreatedAt is when InstallationID was created, or zero for
@@ -839,6 +833,8 @@ type Config struct {
 	HostExplicit bool `json:"-" toml:"-"`
 	// PortExplicit is true when the user passed --port on the CLI.
 	PortExplicit bool `json:"-" toml:"-"`
+
+	validationScope ValidationScope
 }
 
 type configJSON Config
@@ -1437,7 +1433,6 @@ func (c *Config) applyConfigTOML(data string) error {
 		if err := rejectUnknownVectorKeys(meta); err != nil {
 			return err
 		}
-		c.vectorSectionDefined = true
 	}
 	if file.ZoomLevel != nil {
 		if err := c.validateSection(ScopeServer, "zoom_level", file.ZoomLevel.Validate); err != nil {

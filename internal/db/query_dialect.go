@@ -65,17 +65,11 @@ func (d QueryDialect) starredPredicateSQL(idExpr string) string {
 func (d QueryDialect) labelPredicateSQL(
 	q func(string) string, ph string,
 ) string {
-	if d.labelPredicate != nil {
-		return d.labelPredicate(q, ph)
-	}
 	return "EXISTS (SELECT 1 FROM session_labels sl WHERE sl.session_id = " +
 		q("id") + " AND sl.label = " + ph + ")"
 }
 
 func (d QueryDialect) prLinkPredicateSQL(col, repoPh, numPh, hostPh string) string {
-	if d.prLinkPredicate != nil {
-		return d.prLinkPredicate(col, repoPh, numPh, hostPh)
-	}
 	pred := "EXISTS (SELECT 1 FROM json_each(NULLIF(" + col + ", '')) pl WHERE 1=1"
 	if repoPh != "" {
 		pred += " AND lower(json_extract(pl.value, '$.repository')) = " + repoPh
@@ -718,7 +712,7 @@ func annotationTreePredicate(
 		"SELECT annotated_session.id FROM sessions annotated_session" +
 		" WHERE " + SessionTreeMemberPredicate(f, b.dialect, "annotated_session") +
 		" AND " + strings.Join(preds, " AND ") +
-		" " + b.dialect.recursiveUnionSQL() + " " +
+		" UNION " +
 		"SELECT annotated_parent.id FROM sessions annotated_parent" +
 		" JOIN sessions annotated_child ON " +
 		b.dialect.ParentRelation("annotated_child", "annotated_parent") +

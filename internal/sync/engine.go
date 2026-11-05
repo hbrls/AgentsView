@@ -2171,7 +2171,7 @@ func (e *Engine) classifyProviderChangedPath(
 				AllowWatermarkOnlySources: true,
 			}
 			if watermarkContainer != "" && watermarkPreStateOK &&
-				!e.forceParse && e.pathRewriter == nil {
+				!e.forceParse {
 				request.StoredMemberFreshnessPage = e.storedMemberFreshnessPager(watermarkContainer, def.IDPrefix, nil)
 			}
 			if provider.Capabilities().Source.StoredSourceHints == parser.CapabilitySupported {
@@ -3066,7 +3066,7 @@ func (e *Engine) resyncBuildLocked(
 	ctx context.Context, onProgress ProgressFunc,
 	ops rebuildOperations,
 ) (stats SyncStats, retErr error) {
-	if e.sourceSyncErr != nil && (!errors.Is(e.sourceSyncErr, db.ErrArchiveOnly) || len(opts.Contributors) > 0) {
+	if e.sourceSyncErr != nil && !errors.Is(e.sourceSyncErr, db.ErrArchiveOnly) {
 		return SyncStats{Aborted: true}, e.sourceSyncErr
 	}
 	e.clearPiebaldFailureMemo()
@@ -3337,140 +3337,7 @@ func (e *Engine) resyncBuildLocked(
 		return stats, nil
 	}
 
-	for contributorIndex, contributor := range opts.Contributors {
-		if contributor.Started != nil {
-			contributor.Started()
-		}
-		contributorEngine := NewEngine(ctx, newDB, contributor.Config)
-		contributorEngine.archiveStore = origDB
-		contributorEngine.archiveRebuildIndex = archiveIndex
-		contributorEngine.deferredSourceCwd = deferredSourceCwd
-		contributorEngine.deferredNativeTitles = deferredTitles
-		contributorEngine.forceFullParse = contributor.ForceParse ||
-			contributor.ForceFullParseAfterCache
-		contributorEngine.forceFullParseAllowsCache =
-			contributor.ForceFullParseAfterCache && !contributor.ForceParse
-		contributorProgress := func(p Progress) {
-			if contributor.Progress != nil {
-				p = contributor.Progress(p)
-			}
-			if p.Phase != PhaseFinalizing {
-				p.SessionsDone += stats.TotalSessions
-				p.SessionsTotal += stats.TotalSessions
-				p.MessagesIndexed += stats.messagesIndexed
-			}
-			reportResyncProgress(p)
-		}
-		contributorStats := contributorEngine.syncAllLocked(
-			ctx, contributorProgress, time.Time{}, nil,
-			syncWriteBulk, true, contributor.ForceParse,
-		)
-		e.failures.Merge(&contributorEngine.failures)
-		contributorEngine.phaseStats.Log("resync contributor " + contributor.Name)
-		phase := phaseSnapshot(contributor.Name, &contributorEngine.phaseStats)
-		contributorSafetyAbort := shouldAbortResyncSwap(
-			contributorStats,
-			contributorOldFileSessions[contributorIndex],
-			0,
-		)
-		if contributorSafetyAbort {
-			contributorStats.Aborted = true
-		}
-		mergeSyncStats(&stats, contributorStats)
-		pendingTombstoned += stats.Tombstoned
-		stats.Tombstoned = 0
-		pendingLinksUpdated += stats.LinksUpdated
-		stats.LinksUpdated = 0
-		if opts.includePhaseDiagnostics {
-			stats.RebuildPhases = append(stats.RebuildPhases, phase)
-		}
-		runAfterFailure := func() error {
-			defer e.failures.Merge(&contributorEngine.failures)
-			if restoreActiveWriterOnAbort && origDB.WriterClosed() {
-				if err := origDB.ReopenWriter(); err != nil {
-					return fmt.Errorf(
-						"reopen active writer for contributor failure: %w", err,
-					)
-				}
-			}
-			if contributor.AfterFailure != nil {
-				return contributor.AfterFailure(contributorEngine, origDB)
-			}
-			return nil
-		}
-		if !contributorStats.ProcessingComplete() || stats.Aborted || ctx.Err() != nil ||
-			contributorSafetyAbort {
-			failureHookErr := runAfterFailure()
-			contributorEngine.Close()
-			if contributor.Finished != nil {
-				contributor.Finished(
-					contributorStats, errors.Join(ctx.Err(), failureHookErr),
-				)
-			}
-			newDB.Close()
-			removeTempDB(tempPath)
-			restoreSkipCache()
-			stats.Aborted = true
-			stats.Warnings = append(stats.Warnings, fmt.Sprintf(
-				"resync aborted: contributor %q did not complete",
-				contributor.Name,
-			))
-			e.mu.Lock()
-			e.lastSyncStats = stats
-			e.mu.Unlock()
-			if err := ctx.Err(); err != nil {
-				return stats, err
-			}
-			if failureHookErr != nil {
-				return stats, &RebuildContributorError{
-					Contributor: contributor.Name,
-					Err:         failureHookErr,
-				}
-			}
-			return stats, nil
-		}
-		if contributor.AfterSync != nil {
-			if err := contributor.AfterSync(contributorEngine, newDB); err != nil {
-				failureErr := errors.Join(err, runAfterFailure())
-				contributorEngine.Close()
-				if contributor.Finished != nil {
-					contributor.Finished(contributorStats, failureErr)
-				}
-				newDB.Close()
-				removeTempDB(tempPath)
-				restoreSkipCache()
-				stats.Aborted = true
-				stats.Warnings = append(stats.Warnings, fmt.Sprintf(
-					"resync contributor %q failed: %v",
-					contributor.Name, err,
-				))
-				e.mu.Lock()
-				e.lastSyncStats = stats
-				e.mu.Unlock()
-				return stats, &RebuildContributorError{
-					Contributor: contributor.Name,
-					Err:         failureErr,
-				}
-			}
-		}
-		contributorEngine.Close()
-		if contributor.Finished != nil {
-			contributor.Finished(contributorStats, nil)
-		}
-	}
-
-	localSafetyAbort := false
-	if len(opts.Contributors) > 0 ||
-		len(opts.UnavailableContributorIDPrefixes) > 0 {
-		// Evaluate local safety after contributors so a contributor's own
-		// cancellation or failure remains the reported abort reason. Trash
-		// copied from the old archive cannot make an empty local pass safe.
-		localSafetyAbort = shouldAbortResyncSwap(
-			localStats, localOldFileSessions, 0,
-		)
-	}
-	abortSwap := localSafetyAbort ||
-		shouldAbortResyncSwap(stats, rebuildOldFileSessions, trashedCopied)
+	abortSwap := shouldAbortResyncSwap(stats, oldFileSessions, trashedCopied)
 	if abortSwap {
 		log.Printf(
 			"resync: aborting swap, %d synced / %d failed / %d total",
@@ -13481,9 +13348,6 @@ func (e *Engine) applyProviderFilePathPolicies(
 	idPrefix string,
 ) {
 	// Captured identities share paths; the archive policy validates each ID.
-	if e.archiveSessionPolicy != nil {
-		return
-	}
 	if len(res.results) == 0 {
 		return
 	}
@@ -13726,11 +13590,6 @@ func (e *Engine) deleteParserExcludedSessions(ctx context.Context,
 
 	excluded := res.excludedSessionIDs
 	if len(excluded) > 0 {
-		if e.parserExclusionPolicy != nil {
-			if err := e.parserExclusionPolicy(ctx, excluded); err != nil {
-				return nil, err
-			}
-		}
 		if _, err := e.db.DeleteParserExcludedSessions(ctx, excluded); err != nil {
 			return nil, err
 		}
@@ -15015,10 +14874,7 @@ func (e *Engine) providerStatFreshnessMtime(
 // composite under the logical key (see
 // TestSyncCodebuffProviderStatHashRemoteStoresUnderLogicalKey).
 func (e *Engine) providerStatDigestEligible(agent parser.AgentType) bool {
-	if e.pathRewriter == nil {
-		return true
-	}
-	return agent != parser.AgentClaude && agent != parser.AgentEvener && !isCodexFormatAgent(agent)
+	return true
 }
 
 // providerFreshDigestSourceCurrentInDB reports whether the active stored
@@ -16357,14 +16213,14 @@ func (e *Engine) codexIndexRenamedRawIDs(ctx context.Context,
 	if e.codexStoredNameDiffers(uuid, title) {
 		rawIDs = append(rawIDs, uuid)
 	}
-	threadSessionID := e.idPrefix + "codex:" + uuid
+	threadSessionID := "codex:" + uuid
 	pageIDs, err := e.db.CodexRevertPageSessionIDs(ctx, threadSessionID)
 	if err != nil {
 		log.Printf("codex index rename: listing revert pages of %s: %v", threadSessionID, err)
 		return rawIDs
 	}
 	for _, id := range pageIDs {
-		raw := strings.TrimPrefix(id, e.idPrefix+"codex:")
+		raw := strings.TrimPrefix(id, "codex:")
 		if parser.CodexThreadIDFromSessionKey(raw) != uuid {
 			continue
 		}
@@ -17868,12 +17724,6 @@ func (e *Engine) prepareSessionNormalizedContext(
 	if err := ctx.Err(); err != nil {
 		return ingest.PreparedSession{}, sessionWritePreserved, err
 	}
-	if e.archiveSessionPolicy != nil {
-		keep, err := e.archiveSessionPolicy(ctx, &s, pw.sess.ID)
-		if err != nil || !keep {
-			return ingest.PreparedSession{}, sessionWritePreserved, err
-		}
-	}
 	applySourceCwdResolution(
 		&s, pw.sourceCwdResolution, pw.sourceCwdStored, pw.sourceCwdStoredOK,
 	)
@@ -17923,11 +17773,6 @@ func (e *Engine) prepareSessionNormalizedContext(
 	prepared, err := ingest.FinalizeRows(ctx, candidate, options)
 	if err != nil {
 		return ingest.PreparedSession{}, sessionWritePreserved, err
-	}
-	if prepared.PlanUsage != nil {
-		prepared.PlanUsage.CountedUnder = applyIDPrefixToID(
-			e.idPrefix, prepared.PlanUsage.CountedUnder,
-		)
 	}
 	if candidate.Parsed.Session.Agent == parser.AgentCodexCloud {
 		if err := e.keepCodexCloudUsage(ctx, &prepared); err != nil {

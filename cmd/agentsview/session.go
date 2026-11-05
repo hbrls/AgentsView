@@ -143,11 +143,6 @@ func resolveWritableServiceWithIntent(
 		return servicehttp.NewHTTPBackend(remote, token, false, ""),
 			func() {}, nil
 	}
-	if pgReadRequested(cmd) {
-		return nil, nil, errors.New(
-			"--pg is read-only and cannot be used with write commands",
-		)
-	}
 	cfg, err := config.LoadPFlagsFor(cmd.Flags(), config.ScopeLocal)
 	if err != nil {
 		return nil, nil, fmt.Errorf("loading config: %w", err)

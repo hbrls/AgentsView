@@ -8,120 +8,12 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
-
-func TestClaudeProviderScopedDiscoveryBoundsTraversal(t *testing.T) {
-	base := filepath.Clean(t.TempDir())
-	for i := range 128 {
-		writeSourceFile(t, filepath.Join(base, fmt.Sprintf("sibling-%d", i), "other.jsonl"), claudeProviderFixture("other"))
-	}
-	for _, mode := range []string{"project", "subagents", "file", "gone", "ancestor file", "unreadable scope", "overlap", "multi-root", "unreadable nested", "symlink", "yield error", "root yield error", "file yield error"} {
-		t.Run(mode, func(t *testing.T) {
-			root := base
-			if mode == "symlink" || mode == "root yield error" {
-				root = filepath.Clean(t.TempDir())
-			}
-			project := filepath.Join(root, "target")
-			if mode == "symlink" {
-				require.NoError(t, os.Symlink(filepath.Clean(t.TempDir()), project))
-			}
-			main := filepath.Join(project, "session-main.jsonl")
-			subagents := filepath.Join(project, "session-main", "subagents")
-			child := filepath.Join(subagents, "agent-child.jsonl")
-			healthy := filepath.Join(root, "healthy", "session-healthy.jsonl")
-			writeSourceFile(t, main, claudeProviderFixture("main"))
-			writeSourceFile(t, child, claudeProviderFixture("child"))
-			writeSourceFile(t, filepath.Join(project, "blocked"), "file")
-			roots := []string{root}
-			if mode == "multi-root" {
-				roots = append(roots, filepath.Clean(t.TempDir()))
-				healthy = filepath.Join(roots[1], "healthy", "session-healthy.jsonl")
-			}
-			writeSourceFile(t, healthy, claudeProviderFixture("healthy"))
-			bounded := mode == "project" || mode == "subagents" || mode == "file" || mode == "gone" || mode == "ancestor file" || mode == "unreadable scope"
-			requested := []string{subagents, project, filepath.Dir(healthy)}
-			want := []string{main, child, healthy}
-			switch mode {
-			case "project":
-				requested, want = []string{project}, []string{main, child}
-			case "subagents":
-				requested, want = []string{subagents}, []string{child}
-			case "file", "file yield error":
-				requested, want = []string{main}, []string{main}
-			case "gone":
-				requested, want = []string{filepath.Join(root, "gone")}, nil
-			case "ancestor file":
-				requested, want = []string{filepath.Join(project, "blocked", "subagents")}, nil
-			case "unreadable scope":
-				requested, want = []string{project}, nil
-			case "unreadable nested":
-				want = []string{main, healthy}
-			case "root yield error":
-				requested = []string{root}
-			}
-			provider, ok := NewProvider(AgentClaude, ProviderConfig{Roots: roots})
-			require.True(t, ok)
-			var scopes []ReconciliationScope
-			for _, path := range requested {
-				plan, err := provider.ResolveReconciliationScopes(t.Context(), ReconciliationScopeRequest{Roots: []string{path}})
-				require.NoError(t, err)
-				scopes = append(scopes, plan.Scopes...)
-			}
-			reads := make(map[string]int)
-			ctx := withStreamingDirectoryReader(t.Context(), func(ctx context.Context, path string, yield func(os.DirEntry) error) error {
-				reads[path]++
-				if mode == "unreadable scope" && path == project || mode == "unreadable nested" && path == subagents {
-					return os.ErrPermission
-				}
-				return streamDirectoryEntriesDirect(ctx, path, yield)
-			})
-			var paths []string
-			stop := errors.New("consumer stopped")
-			err := provider.(ScopedStreamingDiscoverer).DiscoverScopesEach(ctx, scopes, func(source SourceRef) error {
-				paths = append(paths, source.DisplayPath)
-				wantRoot, wantProject := root, "target"
-				if source.DisplayPath == healthy {
-					wantRoot, wantProject = roots[len(roots)-1], "healthy"
-				}
-				assert.Equal(t, wantRoot, source.Opaque.(claudeSource).Root)
-				assert.Equal(t, wantProject, source.ProjectHint)
-				if strings.HasSuffix(mode, "yield error") {
-					return stop
-				}
-				return nil
-			})
-			switch mode {
-			case "unreadable scope", "unreadable nested":
-				require.ErrorIs(t, err, os.ErrPermission)
-				assert.ElementsMatch(t, want, paths)
-			case "yield error", "root yield error", "file yield error":
-				require.Equal(t, stop, err)
-				assert.Len(t, paths, 1)
-			default:
-				require.NoError(t, err)
-				assert.ElementsMatch(t, want, paths)
-			}
-			if bounded {
-				assert.LessOrEqual(t, len(reads), 3, "discovery work must stay constant as siblings grow")
-				for path := range reads {
-					assert.True(t, reconciliationScopeWithinOrSame(path, requested[0]), "read outside the requested subtree: %s", path)
-				}
-			}
-			if mode == "multi-root" {
-				assert.Equal(t, map[string]int{project: 1, filepath.Dir(subagents): 1, subagents: 1, filepath.Dir(healthy): 1}, reads)
-			}
-			for path, count := range reads {
-				assert.Equal(t, 1, count, "repeated directory read: %s", path)
-			}
-		})
-	}
-}
 
 func TestClaudeProviderSourceMethods(t *testing.T) {
 	root := t.TempDir()

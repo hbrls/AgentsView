@@ -125,18 +125,6 @@ func TestDirectoryPlanBlankRootNeverResolvesToWorkingDirectory(t *testing.T) {
 		"a blank root must be discarded before normalization")
 }
 
-func TestDirectoryPlanRemoteConfiguredRootKeepsCoverageUnreachable(t *testing.T) {
-	root := t.TempDir()
-	remote := "s3://bucket/sessions"
-	plan := resolveDirectoryPlan(t, []string{root, remote}, []string{root})
-
-	require.Len(t, plan.Scopes, 1)
-	assert.ElementsMatch(t,
-		[]string{filepath.Clean(root), remote},
-		plan.RequiredCoverageIdentities,
-		"a remote configured root is never coverable by a local pass")
-}
-
 func TestDirectoryPlanDeduplicatesPathEquivalentRoots(t *testing.T) {
 	root := t.TempDir()
 	spelledDot := root + string(filepath.Separator) + "."

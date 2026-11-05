@@ -123,34 +123,6 @@ homes = ["/homes/work/.codex"]
 	}, cfg.ResolveDirs(parser.AgentCodex))
 }
 
-func TestLoadFileAgentHomesValidation(t *testing.T) {
-	tests := []struct {
-		name    string
-		config  string
-		wantErr string
-	}{
-		{
-			name: "s3 home",
-			config: `
-[agents.codex]
-homes = ["/ok", "s3://bucket/codex"]
-`,
-			wantErr: "agents.codex.homes: entry 2: home \"s3://bucket/codex\" is an S3 root",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			f := newConfigFixture(t)
-			setTestHome(t, canonicalTempDir(t))
-			f.WriteConfigText(t, tt.config)
-
-			_, err := LoadMinimal()
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), tt.wantErr)
-		})
-	}
-}
-
 func TestResolveDirs_CodexHomeRootEnvVar(t *testing.T) {
 	dir := setupTestEnv(t)
 	setTestHome(t, canonicalTempDir(t))
@@ -255,11 +227,7 @@ func TestNormalizeAgentHomesRejectsUnsupportedInput(t *testing.T) {
 			input:   map[string][]string{"codex": {"/x", " "}},
 			wantErr: "agents.codex.homes: entry 2: home is required",
 		},
-		{
-			name:    "s3 home",
-			input:   map[string][]string{"claude": {"s3://bucket/claude"}},
-			wantErr: "is an S3 root",
-		},
+
 		{
 			name:    "aliased provider keys",
 			input:   map[string][]string{"codex": {"/a"}, aliasedProviderKey: {"/b"}},

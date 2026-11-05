@@ -19,10 +19,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/clickhouse"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/storage"
 	"go.kenn.io/kit/daemon"
 )
 
@@ -188,57 +186,6 @@ func TestScopedConfigDaemonTransportUsesDeploymentAuth(t *testing.T) {
 	require.NoError(t, err)
 	_, err = ensureTransport(&cfg, transportIntentRead, 0)
 	require.ErrorContains(t, err, "AGENTSVIEW_AUTH_TOKEN_FILE")
-}
-
-func TestScopedConfigReplicaTargetCanDisableVectors(t *testing.T) {
-	for _, tt := range []struct {
-		backend storage.Replica
-		url     string
-	}{{pgReplica{}, "postgres://db.example/archive"}, {clickhouse.Backend{}, "clickhouse://db.example/archive"}} {
-		backend := tt.backend
-		t.Run(backend.Name(), func(t *testing.T) {
-			seedScopedConfigArchive(t)
-			data := "[" + backend.Name() + "]\nurl='" + tt.url + "'\npush_vectors=false\n[vector]\nenabled=true\n"
-			require.NoError(t, os.WriteFile(filepath.Join(os.Getenv("AGENTSVIEW_DATA_DIR"), "config.toml"), []byte(data), 0o600))
-			push := ReplicaPushConfig{}
-			cfg, err := config.LoadMinimalFor(replicaConfigScope(backend, &push))
-			require.NoError(t, err)
-			refs, err := storage.SelectTargets(backend, cfg, "", false)
-			require.NoError(t, err)
-			target, err := backend.ResolveTarget(cfg, refs[0])
-			require.NoError(t, err)
-			assert.Nil(t, replicaVectorPushSource(cfg, target, push))
-			require.NoError(t, validateReplicaPushVectors(cfg, push, target.Target.PushVectors))
-			require.ErrorContains(t, validateReplicaPushVectors(cfg, push, true), "model is required")
-			push.NoVectors = true
-			require.NoError(t, validateReplicaPushVectors(cfg, push, true))
-		})
-	}
-}
-
-func TestScopedConfigPGDeploymentConsumers(t *testing.T) {
-	for _, tt := range []struct {
-		name, insecure, want string
-		args                 []string
-	}{
-		{"vectors", "invalid", "AGENTSVIEW_PG_ALLOW_INSECURE must be a boolean", []string{"pg", "vectors", "list"}},
-		{"raw reparse", "true", "hosted raw projection schema is invalid", []string{"pg", "raw-reparse", "--run-id", "scoped"}},
-		{"PG read", "true", "hosted raw projection schema is invalid", []string{"session", "list", "--pg"}},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			seedScopedConfigArchive(t)
-			dir := os.Getenv("AGENTSVIEW_DATA_DIR")
-			data := "cursor_secret = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='\n[vector]\nenabled=false\n[pg.primary]\nurl='postgres://db.example/archive?sslmode=disable'\nschema='bad-name'\nraw_tenant='tenant'\n"
-			require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte(data), 0o600))
-			env := []string{
-				"AGENTSVIEW_MODE=serve", "AGENTSVIEW_REQUIRE_AUTH=true", "AGENTSVIEW_PG_ALLOW_INSECURE=" + tt.insecure,
-				"AGENTSVIEW_AUTH_TOKEN_FILE=" + filepath.Join(dir, "missing-token"), "AGENTSVIEW_EMBEDDINGS_ENDPOINT=http://127.0.0.1:30000/v1",
-			}
-			_, stderr, err := runScopedConfigCLI(t, env, tt.args...)
-			require.Error(t, err)
-			assert.Contains(t, stderr, tt.want, "PG settings must apply before connecting, without unrelated deployment settings")
-		})
-	}
 }
 
 // Every case bypasses ensureTransportContext. Dropping narrow deployment auth

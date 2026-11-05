@@ -367,8 +367,6 @@ func TestCodexForkOfRevertedThreadDropsReplayedPageTurns(t *testing.T) {
 			assert.Equal(t, DataVersionNeedsRetry, outcome.Results[0].DataVersion)
 			assert.Contains(t, outcome.Results[0].RetryReason, "parent turns")
 			assert.Len(t, outcome.Results[0].Result.Messages, 5, "keep copied history until every parent directory is readable")
-			_, _, err = ResolveRawCapturePlan(t.Context(), provider, source)
-			require.ErrorIs(t, err, ErrInvalidRawCapturePlan, "raw capture must not silently omit parent pages")
 
 			require.NoError(t, os.Chmod(pageDir, 0o755))
 			// Sync constructs providers per parse; the shared inventory must
@@ -384,10 +382,6 @@ func TestCodexForkOfRevertedThreadDropsReplayedPageTurns(t *testing.T) {
 			assert.Equal(t, "fork question", result.Result.Messages[0].Content)
 			assert.Equal(t, "fork answer", result.Result.Messages[1].Content)
 			assert.Equal(t, 500, result.Result.Session.TotalOutputTokens)
-			plan, supported, err := ResolveRawCapturePlan(t.Context(), provider, source)
-			require.NoError(t, err)
-			assert.True(t, supported)
-			assert.Len(t, plan.Entries, 3, "capture the fork, parent head, and parent page")
 		})
 	}
 }

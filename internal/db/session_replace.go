@@ -27,7 +27,15 @@ func (db *DB) ReplaceSessionKeepingTrashedCopy(
 	// Writers hold db.mu, so the row read here matches the messages the transaction reads.
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	src, err := db.GetArtifactExportSession(ctx, id)
+	launcherApplied := `COALESCE(parser_parent_session_id, '') = ''
+		AND NOT ` + spawnEdgeExistsSQL("sessions") + `
+		AND EXISTS (SELECT 1 FROM session_external_parents ep
+			WHERE ep.session_id = sessions.id AND ep.parent_session_id = sessions.parent_session_id)`
+	parent := `CASE WHEN ` + launcherApplied + ` THEN NULL ELSE parent_session_id END`
+	relationship := `CASE WHEN ` + launcherApplied + ` THEN ` + parserRelationshipSQL + ` ELSE relationship_type END`
+	cols := sessionFullColsBeforeParent + parent + `, parser_parent_session_id, ` + relationship + sessionFullColsAfterRelationship
+	src, err := scanSessionFullRow(db.getReader().QueryRowContext(ctx,
+		"SELECT "+cols+" FROM sessions WHERE id = ?", id), id)
 	if err != nil {
 		return "", err
 	}

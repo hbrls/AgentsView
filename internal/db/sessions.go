@@ -10,7 +10,6 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
-	"log"
 	pathpkg "path"
 	"path/filepath"
 	"sort"
@@ -21,6 +20,13 @@ import (
 	"go.kenn.io/agentsview/internal/lockctx"
 	"go.kenn.io/agentsview/internal/parser"
 )
+
+func (db *DB) lockWriterCtx(ctx context.Context) error {
+	if err := lockctx.Lock(ctx, &db.mu); err != nil {
+		return fmt.Errorf("stopped while waiting for an archive write to finish: %w", err)
+	}
+	return nil
+}
 
 // ErrInvalidCursor is returned when a cursor cannot be decoded or verified.
 var ErrInvalidCursor = errors.New("invalid cursor")

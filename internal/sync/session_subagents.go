@@ -40,12 +40,6 @@ func (e *Engine) syncSessionWithSubagentsContext(ctx context.Context, sessionID 
 		return parentErr
 	}
 
-	var subagentErr error
-	if strings.HasPrefix(sourcePath, "s3://") {
-		subagentErr = e.syncS3SubagentTranscriptsContext(
-			ctx, sessionID, parentAgent, paths, try)
-	} else {
-		subagentErr = e.syncPathsWithLockContext(ctx, paths, false, try)
-	}
+	subagentErr := e.syncPathsWithLockContext(ctx, paths, false, try)
 	return errors.Join(parentErr, subagentErr)
 }

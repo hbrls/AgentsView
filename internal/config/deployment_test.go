@@ -67,14 +67,6 @@ func deploymentLoaders() []deploymentLoader {
 			}
 			return LoadPFlags(fs)
 		}},
-		{name: "LoadRemoteServePFlags", remote: true, load: func(args ...string) (Config, error) {
-			fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
-			RegisterServePFlags(fs)
-			if err := fs.Parse(args); err != nil {
-				return Config{}, err
-			}
-			return LoadRemoteServePFlags(fs)
-		}},
 		{name: "LoadMinimal", load: func(args ...string) (Config, error) {
 			return LoadMinimal()
 		}},
@@ -119,11 +111,6 @@ func TestDeploymentEnvIgnoredWithoutMode(t *testing.T) {
 				got, err := loader.load()
 				require.NoError(t, err)
 				assert.Equal(t, want, got)
-				wantPG, err := want.ResolvePG()
-				require.NoError(t, err)
-				gotPG, err := got.ResolvePG()
-				require.NoError(t, err)
-				assert.Equal(t, wantPG, gotPG)
 			})
 		}
 	}
@@ -353,174 +340,9 @@ func TestDeploymentInlineSecretsUnchanged(t *testing.T) {
 
 			assert.Equal(t, want, got)
 			assert.Equal(t, want.AuthToken, got.AuthToken)
-			wantPG, err := want.ResolvePG()
-			require.NoError(t, err)
-			gotPG, err := got.ResolvePG()
-			require.NoError(t, err)
-			assert.Equal(t, wantPG.URL, gotPG.URL)
 			if server, ok := got.Vector.Embeddings.Servers["local"]; ok {
 				assert.Equal(t, "inline-embed-key", server.APIKey())
 			}
 		})
 	}
-}
-
-func TestDeploymentEmbeddings(t *testing.T) {
-	t.Run("endpoint gets owner defaults", func(t *testing.T) {
-		for _, tc := range []struct {
-			name, batchSize string
-			wantBatchSize   int
-		}{
-			{name: "default batch size", wantBatchSize: 32},
-			{name: "custom batch size", batchSize: " 2 ", wantBatchSize: 2},
-		} {
-			t.Run(tc.name, func(t *testing.T) {
-				unsetDeploymentEnv(t)
-				setupTestEnv(t)
-				t.Setenv("AGENTSVIEW_MODE", "pg-serve")
-				t.Setenv("AGENTSVIEW_EMBEDDINGS_ENDPOINT", " http://embeddings.internal/v1 ")
-				if tc.batchSize != "" {
-					t.Setenv("AGENTSVIEW_EMBEDDINGS_BATCH_SIZE", tc.batchSize)
-				}
-				cfg, err := LoadMinimal()
-				require.NoError(t, err)
-				require.NotNil(t, cfg.DeploymentEmbeddings)
-				assert.Equal(t, "http://embeddings.internal/v1", cfg.DeploymentEmbeddings.Endpoint)
-				assert.Equal(t, tc.wantBatchSize, cfg.DeploymentEmbeddings.BatchSize)
-				assert.Equal(t, 4, cfg.DeploymentEmbeddings.Concurrency)
-				assert.Equal(t, "30s", cfg.DeploymentEmbeddings.Timeout)
-				assert.Equal(t, 3, cfg.DeploymentEmbeddings.MaxRetries)
-				assert.Empty(t, cfg.DeploymentEmbeddings.APIKey())
-				assert.False(t, cfg.Vector.Enabled, "the endpoint alone never enables [vector]")
-			})
-		}
-	})
-
-	t.Run("key file expands home", func(t *testing.T) {
-		unsetDeploymentEnv(t)
-		setupTestEnv(t)
-		home := t.TempDir()
-		setTestHome(t, home)
-		writeSecret(t, home, "embed-key", "embed-secret\n")
-		t.Setenv("AGENTSVIEW_MODE", "serve")
-		t.Setenv("AGENTSVIEW_EMBEDDINGS_ENDPOINT", "http://embeddings.internal/v1")
-		t.Setenv("AGENTSVIEW_EMBEDDINGS_API_KEY_FILE", "~/embed-key")
-		cfg, err := LoadMinimal()
-		require.NoError(t, err)
-		require.NotNil(t, cfg.DeploymentEmbeddings)
-		assert.Equal(t, "embed-secret", cfg.DeploymentEmbeddings.APIKey())
-	})
-}
-
-func TestDeploymentEmbeddingsRejectInvalid(t *testing.T) {
-	for _, tc := range []struct {
-		name      string
-		vector    bool
-		endpoint  *string
-		keyFile   string
-		batchSize *string
-		want      string
-	}{
-		{name: "with vector section", vector: true, endpoint: new("http://e/v1"), want: "AGENTSVIEW_EMBEDDINGS_*"},
-		{name: "key file without endpoint", keyFile: "key-secret", want: "AGENTSVIEW_EMBEDDINGS_ENDPOINT"},
-		{name: "blank endpoint", endpoint: new("  "), want: "AGENTSVIEW_EMBEDDINGS_ENDPOINT"},
-		{name: "blank key file", endpoint: new("http://e/v1"), keyFile: " \n", want: "AGENTSVIEW_EMBEDDINGS_API_KEY_FILE"},
-		{name: "missing key file", endpoint: new("http://e/v1"), keyFile: "missing", want: "AGENTSVIEW_EMBEDDINGS_API_KEY_FILE"},
-		{name: "batch size without endpoint", batchSize: new("2"), want: "AGENTSVIEW_EMBEDDINGS_ENDPOINT"},
-		{name: "batch size with vector section", vector: true, batchSize: new("2"), want: "AGENTSVIEW_EMBEDDINGS_*"},
-		{name: "non-integer batch size", endpoint: new("http://e/v1"), batchSize: new("1.5"), want: "AGENTSVIEW_EMBEDDINGS_BATCH_SIZE"},
-		{name: "blank batch size", endpoint: new("http://e/v1"), batchSize: new(" "), want: "AGENTSVIEW_EMBEDDINGS_BATCH_SIZE"},
-		{name: "zero batch size", endpoint: new("http://e/v1"), batchSize: new("0"), want: "AGENTSVIEW_EMBEDDINGS_BATCH_SIZE"},
-		{name: "negative batch size", endpoint: new("http://e/v1"), batchSize: new("-1"), want: "AGENTSVIEW_EMBEDDINGS_BATCH_SIZE"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			unsetDeploymentEnv(t)
-			dir := setupTestEnv(t)
-			if tc.vector {
-				writeConfig(t, dir, map[string]any{"vector": map[string]any{"enabled": false}})
-			}
-			t.Setenv("AGENTSVIEW_MODE", "serve")
-			if tc.endpoint != nil {
-				t.Setenv("AGENTSVIEW_EMBEDDINGS_ENDPOINT", *tc.endpoint)
-			}
-			if tc.batchSize != nil {
-				t.Setenv("AGENTSVIEW_EMBEDDINGS_BATCH_SIZE", *tc.batchSize)
-			}
-			switch tc.keyFile {
-			case "":
-			case "missing":
-				t.Setenv("AGENTSVIEW_EMBEDDINGS_API_KEY_FILE", filepath.Join(t.TempDir(), "absent"))
-			default:
-				t.Setenv("AGENTSVIEW_EMBEDDINGS_API_KEY_FILE", writeSecret(t, t.TempDir(), "key", tc.keyFile))
-			}
-			_, err := LoadMinimal()
-			require.ErrorContains(t, err, tc.want)
-			assert.NotContains(t, err.Error(), "key-secret")
-		})
-	}
-}
-
-func TestDeploymentPGAllowInsecure(t *testing.T) {
-	t.Run("legacy default target", func(t *testing.T) {
-		for _, tc := range []struct {
-			name, value string
-			file, want  bool
-		}{
-			{name: "enables", value: "1", want: true},
-			{name: "disables file setting", value: "false", file: true, want: false},
-		} {
-			t.Run(tc.name, func(t *testing.T) {
-				unsetDeploymentEnv(t)
-				dir := setupTestEnv(t)
-				writeConfig(t, dir, map[string]any{"pg": map[string]any{
-					"url": "postgres://db.example/agentsview", "allow_insecure": tc.file,
-				}})
-				t.Setenv("AGENTSVIEW_MODE", "serve")
-				t.Setenv("AGENTSVIEW_PG_ALLOW_INSECURE", tc.value)
-				cfg, err := LoadMinimal()
-				require.NoError(t, err)
-				pg, err := cfg.ResolvePG()
-				require.NoError(t, err)
-				assert.Equal(t, tc.want, pg.AllowInsecure)
-			})
-		}
-	})
-
-	t.Run("named targets other than the default are untouched", func(t *testing.T) {
-		unsetDeploymentEnv(t)
-		dir := setupTestEnv(t)
-		require.NoError(t, os.WriteFile(filepath.Join(dir, configFileName), []byte(`
-default_pg = "hub"
-
-[pg.hub]
-url = "postgres://hub.example/agentsview"
-
-[pg.other]
-url = "postgres://other.example/agentsview"
-`), 0o600))
-		t.Setenv("AGENTSVIEW_MODE", "serve")
-		t.Setenv("AGENTSVIEW_PG_ALLOW_INSECURE", "true")
-		cfg, err := LoadMinimal()
-		require.NoError(t, err)
-		hub, err := cfg.ResolvePGTarget("hub")
-		require.NoError(t, err)
-		assert.True(t, hub.AllowInsecure)
-		other, err := cfg.ResolvePGTarget("other")
-		require.NoError(t, err)
-		assert.False(t, other.AllowInsecure)
-	})
-
-	t.Run("unset keeps the file setting", func(t *testing.T) {
-		unsetDeploymentEnv(t)
-		dir := setupTestEnv(t)
-		writeConfig(t, dir, map[string]any{"pg": map[string]any{
-			"url": "postgres://db.example/agentsview", "allow_insecure": true,
-		}})
-		t.Setenv("AGENTSVIEW_MODE", "serve")
-		cfg, err := LoadMinimal()
-		require.NoError(t, err)
-		pg, err := cfg.ResolvePG()
-		require.NoError(t, err)
-		assert.True(t, pg.AllowInsecure)
-	})
 }

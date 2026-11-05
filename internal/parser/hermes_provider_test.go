@@ -1760,59 +1760,7 @@ func TestHermesCronStateGroups(t *testing.T) {
 			}
 		}
 	}
-	t.Run("home scopes", func(t *testing.T) {
-		var homeKeys []string
-		for _, profile := range []string{"", "", "profile-a", "profile-a", "profile-b", `remote:C:\profiles\a`, `remote:C:\profiles\b`} {
-			root := t.TempDir()
-			sessionsDir := filepath.Join(root, "sessions")
-			require.NoError(t, os.MkdirAll(sessionsDir, 0o755))
-			createHermesStateDB(t, root)
-			conn, err := sql.Open("sqlite3", filepath.Join(root, "state.db"))
-			require.NoError(t, err)
-			_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET id = 'cron_job-1_20261006_120000', source = 'cron', parent_session_id = NULL; UPDATE messages SET session_id = 'cron_job-1_20261006_120000'`)
-			require.NoError(t, err)
-			require.NoError(t, conn.Close())
-			for _, transcript := range []struct{ name, body string }{
-				{"session_cron_job-1_20261007_120000.json", `{"platform":"cron","messages":[{"role":"user","content":"hello"}]}`},
-				{"cron_job-1_20261008_120000.jsonl", "{\"role\":\"session_meta\",\"platform\":\"cron\"}\n{\"role\":\"user\",\"content\":\"hello\"}\n"},
-			} {
-				path := filepath.Join(sessionsDir, transcript.name)
-				require.NoError(t, os.WriteFile(path, []byte(transcript.body), 0o644))
-			}
-			provider := newHermesTestProvider(t, root)
-			if profile != "" {
-				provider.Config.PathRewriter = func(path string) string {
-					relative, err := filepath.Rel(root, path)
-					require.NoError(t, err)
-					if strings.HasPrefix(profile, "remote:") {
-						return profile + `\` + strings.ReplaceAll(filepath.ToSlash(relative), "/", `\`)
-					}
-					return "capture://" + profile + "/" + filepath.ToSlash(relative)
-				}
-			}
-			sources, err := provider.Discover(t.Context())
-			require.NoError(t, err)
-			require.Len(t, sources, 3)
-			var key string
-			for _, source := range sources {
-				outcome, err := provider.Parse(t.Context(), ParseRequest{Source: source})
-				require.NoError(t, err)
-				require.Len(t, outcome.Results, 1)
-				for _, result := range outcome.Results {
-					group := result.Result.Session.GroupKey
-					if key == "" {
-						key = group
-					}
-					assert.Equal(t, key, group)
-				}
-			}
-			homeKeys = append(homeKeys, key)
-		}
-		assert.NotEqual(t, homeKeys[0], homeKeys[1])
-		assert.Equal(t, homeKeys[2], homeKeys[3])
-		assert.NotEqual(t, homeKeys[2], homeKeys[4])
-		assert.NotEqual(t, homeKeys[5], homeKeys[6])
-	})
+
 }
 
 func TestHermesChangedPathIgnoresReaderWALEvents(t *testing.T) {

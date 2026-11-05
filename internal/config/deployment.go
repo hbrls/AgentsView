@@ -7,7 +7,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/BurntSushi/toml"
 	"go.kenn.io/agentsview/internal/pathutil"
 )
 
@@ -96,7 +95,7 @@ func (c *Config) applyDeploymentEnv() error {
 	if _, _, err := lookupEnvBool("AGENTSVIEW_PG_ALLOW_INSECURE"); err != nil {
 		return err
 	}
-	return c.ApplyDeploymentEmbeddings()
+	return nil
 }
 
 // ApplyDeploymentAuth loads the deployment authentication used by listeners
@@ -123,61 +122,6 @@ func (c *Config) ApplyDeploymentAuth() error {
 		}
 		c.AuthToken = token
 	}
-	return nil
-}
-
-// ApplyDeploymentEmbeddings loads only the transport needed by PostgreSQL
-// recipe adoption, without loading listener authentication or network settings.
-// It applies nothing unless AGENTSVIEW_MODE is valid.
-// A [vector] section owns its recipe and servers, so the two never combine.
-func (c *Config) ApplyDeploymentEmbeddings() error {
-	if active, err := deploymentVarsActive(
-		"AGENTSVIEW_EMBEDDINGS_ENDPOINT", "AGENTSVIEW_EMBEDDINGS_API_KEY_FILE",
-		"AGENTSVIEW_EMBEDDINGS_BATCH_SIZE",
-	); err != nil || !active {
-		return err
-	}
-	endpoint, endpointSet := os.LookupEnv("AGENTSVIEW_EMBEDDINGS_ENDPOINT")
-	keyPath, keySet := os.LookupEnv("AGENTSVIEW_EMBEDDINGS_API_KEY_FILE")
-	batchSize, batchSet := os.LookupEnv("AGENTSVIEW_EMBEDDINGS_BATCH_SIZE")
-	if !endpointSet && !keySet && !batchSet {
-		return nil
-	}
-	if c.vectorSectionDefined {
-		return errors.New(
-			"AGENTSVIEW_EMBEDDINGS_* cannot be combined with a [vector] section " +
-				"in config.toml; configure the embeddings server in one place")
-	}
-	endpoint = strings.TrimSpace(endpoint)
-	if endpoint == "" {
-		return errors.New("AGENTSVIEW_EMBEDDINGS_ENDPOINT is required " +
-			"when an AGENTSVIEW_EMBEDDINGS_* variable is set")
-	}
-	servers := normalizedEmbeddingsServers(map[string]VectorEmbeddingsServerConfig{
-		deploymentEmbeddingsServer: {Endpoint: endpoint},
-	}, toml.MetaData{})
-	server := servers[deploymentEmbeddingsServer]
-	if batchSet {
-		var err error
-		server.BatchSize, err = strconv.Atoi(strings.TrimSpace(batchSize))
-		if err != nil {
-			return errors.New("AGENTSVIEW_EMBEDDINGS_BATCH_SIZE must be a positive integer")
-		}
-	}
-	if keySet {
-		key, err := readSecretFile("AGENTSVIEW_EMBEDDINGS_API_KEY_FILE", keyPath)
-		if err != nil {
-			return err
-		}
-		server.apiKey = key
-	}
-	if err := server.validate(deploymentEmbeddingsServer, 0); err != nil {
-		if batchSet {
-			return fmt.Errorf("AGENTSVIEW_EMBEDDINGS_BATCH_SIZE: %w", err)
-		}
-		return err
-	}
-	c.DeploymentEmbeddings = &server
 	return nil
 }
 

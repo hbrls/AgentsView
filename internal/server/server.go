@@ -72,10 +72,8 @@ const (
 	defaultInsightLogStopWaitTimeout = 500 * time.Millisecond
 	defaultHTTPReadTimeout           = 10 * time.Second
 	corsAllowedRequestHeaders        = "Content-Type, Authorization, " +
-		service.SemanticSearchIntentHeader + ", " + rawSyncDeviceIDHeader +
-		", " + rawSyncUploadOffsetHeader
-	corsExposedResponseHeaders = rawSyncUploadOffsetHeader + ", " +
-		rawSyncUploadLengthHeader + ", " + rawSyncUploadCompleteHeader + ", Location, " + apiclient.ArchiveStaleHeader
+		service.SemanticSearchIntentHeader
+	corsExposedResponseHeaders = "Location, " + apiclient.ArchiveStaleHeader
 )
 
 // Server is the HTTP server that serves the SPA and REST API.
@@ -90,8 +88,6 @@ type Server struct {
 	settingsApplyMu   gosync.Mutex
 	// onDemandReconfigureMu serializes source updates to onDemandEngine.
 	onDemandReconfigureMu gosync.Mutex
-	// pushTurn lets one archive push run at a time.
-	pushTurn              pushTurn
 	db                    db.Store
 	activityReports       *activityReportCache
 	assetCache            *assetCache
@@ -107,6 +103,7 @@ type Server struct {
 	startupProbeKey       []byte
 	version               VersionInfo
 	chrome                chromeHost
+	codexCloudStatus      *codexcloud.StatusBoard
 	dataDir               string
 
 	// baseCtx, when set, is used as the base context for all

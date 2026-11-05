@@ -234,9 +234,6 @@ func planUsageChangedTx(tx transactionQueries, sessionID string, enqueueArtifact
 	if err := bumpLocalModifiedTx(tx, sessionID, "plan usage replace"); err != nil {
 		return err
 	}
-	if enqueueArtifact {
-		return enqueueArtifactExportTx(tx, sessionID)
-	}
 	return nil
 }
 

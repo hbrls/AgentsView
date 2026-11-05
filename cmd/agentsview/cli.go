@@ -134,7 +134,6 @@ func newRootCommand() *cobra.Command {
 	root.AddCommand(newDoctorCommand())
 	root.AddCommand(newVersionCommand())
 	root.AddCommand(newOpenAPICommand())
-	root.AddCommand(newRemoteSyncCommand())
 
 	defaultHelp := root.HelpFunc()
 	root.SetHelpFunc(func(cmd *cobra.Command, args []string) {
@@ -384,10 +383,6 @@ func newSyncCommandWithRunner(run func(SyncConfig)) *cobra.Command {
 	cmd.Flags().BoolVar(
 		&cfg.Full, "full", false,
 		"Force a full resync regardless of data version",
-	)
-	cmd.Flags().StringVar(
-		&cfg.Host, "host", "",
-		"Configured remote host name",
 	)
 	cmd.Flags().StringVar(
 		&cfg.CPUProfile, "cpuprofile", "",

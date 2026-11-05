@@ -80,7 +80,7 @@ func sessionUsageWithDescendants(
 	}
 	if rowSet == nil {
 		combined, err := combineSubagentUsageFromSessions(
-			ctx, store, root, descendants, includeBreakdown, requireComplete)
+			ctx, store, root, descendants, includeBreakdown)
 		if err != nil {
 			return nil, err
 		}
@@ -104,7 +104,7 @@ func sessionUsageWithDescendants(
 		rowSet.RawOutputTokensBySession,
 		rowSet.DiscardedContributingSessions,
 		rowSet.CanonicalTokenCoverageBySession, tokenExpectations,
-		includeBreakdown, requireComplete)
+		includeBreakdown)
 	if err != nil {
 		return nil, err
 	}

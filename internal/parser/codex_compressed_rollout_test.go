@@ -228,28 +228,6 @@ func TestCodexParseCompressedRolloutMatchesPlain(t *testing.T) {
 		"memory admission uses decoded bytes while the fingerprint keeps compressed bytes")
 }
 
-func TestCodexS3PreferredFilesKeepsPlainOverCompressed(t *testing.T) {
-	plain := "s3://bucket/host/raw/codex/sessions/2026/06/11/" + compressedDayPrefix + compressedThreadA + ".jsonl"
-	archived := "s3://bucket/host/raw/codex/archived_sessions/" + compressedDayPrefix + compressedThreadA + ".jsonl"
-	files := []DiscoveredFile{
-		{Path: plain + ".zst"},
-		{Path: "s3://bucket/host/raw/codex/sessions/2026/06/11/" + compressedDayPrefix + compressedThreadB + ".jsonl.zst"},
-		{Path: plain},
-		{Path: archived + ".zst"},
-	}
-	kept := codexS3PreferredFiles(files)
-	paths := make([]string, 0, len(kept))
-	for _, file := range kept {
-		paths = append(paths, file.Path)
-	}
-	assert.Equal(t, []string{
-		files[1].Path,
-		plain,
-		archived + ".zst",
-	}, paths, "a compressed object beside its plain one is dropped; a lone compressed object "+
-		"and another copy of the session at a different address stay")
-}
-
 func TestCodexIncrementalParseRefusesCompressedRollout(t *testing.T) {
 	root := t.TempDir()
 	content := codexRolloutContent(compressedThreadA, "no offsets")
@@ -310,7 +288,7 @@ func TestCodexExecCheckReadsCompressedRollout(t *testing.T) {
 func TestCodexCompressedForkChildFindsItsReplayParent(t *testing.T) {
 	root := t.TempDir()
 	day := codexDayDir(root)
-	parent := writeFileIn(t, day, compressedDayPrefix+compressedThreadA+".jsonl.zst",
+	writeFileIn(t, day, compressedDayPrefix+compressedThreadA+".jsonl.zst",
 		zstdCompress(t, []byte(codexRolloutContent(compressedThreadA, "parent task"))))
 	childContent := `{"type":"session_meta","payload":{"id":"` + compressedThreadB +
 		`","forked_from_id":"` + compressedThreadA + `"}}` + "\n"
@@ -321,17 +299,6 @@ func TestCodexCompressedForkChildFindsItsReplayParent(t *testing.T) {
 	require.True(t, ok, "a compressed fork child must still report its parent")
 	assert.Equal(t, compressedThreadA, parentID)
 
-	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
-	plan, supported, err := ResolveRawCapturePlan(t.Context(), provider,
-		requireCodexProviderSource(t, provider, compressedThreadB))
-	require.NoError(t, err)
-	require.True(t, supported)
-	var captured []string
-	for _, entry := range plan.Entries {
-		captured = append(captured, entry.LocalPath)
-	}
-	assert.ElementsMatch(t, []string{canonicalRawCaptureTestPath(t, child), canonicalRawCaptureTestPath(t, parent)}, captured)
 }
 
 // TestCodexAllSourcePathsHideCompressedBesidePlain: the quick sync's duplicate
@@ -366,7 +333,7 @@ func TestCodexCompressedSiblingHidden(t *testing.T) {
 
 // Resolving a known rollout must not inspect unrelated archive entries.
 func TestCodexKnownRolloutLookupWorkDoesNotGrowWithArchive(t *testing.T) {
-	for _, reconciliation := range []bool{false, true} {
+	for _, reconciliation := range []bool{false} {
 		t.Run(fmt.Sprintf("reconciliation_%t", reconciliation), func(t *testing.T) {
 			root := t.TempDir()
 			path := writeFileIn(t, root, compressedDayPrefix+compressedThreadA+".jsonl.zst",
@@ -374,15 +341,7 @@ func TestCodexKnownRolloutLookupWorkDoesNotGrowWithArchive(t *testing.T) {
 			provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
 			require.True(t, ok)
 			lookup := func() {
-				if reconciliation {
-					source, found, err := provider.(ReconciliationSourceResolver).SourceForReconciliation(
-						t.Context(), path, "codex:"+compressedThreadA,
-					)
-					require.NoError(t, err)
-					require.True(t, found)
-					require.Equal(t, path, source.DisplayPath)
-					return
-				}
+
 				sources, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
 					Path: path, EventKind: "write",
 				})

@@ -224,7 +224,6 @@ func TestCodexActivityHintsUseConfiguredRootParent(t *testing.T) {
 		"",
 		filepath.Join(base, "sessions"),
 		filepath.Join(base, "archived_sessions"),
-		"s3://bucket/archive/sessions",
 	}})
 	require.True(t, ok)
 
