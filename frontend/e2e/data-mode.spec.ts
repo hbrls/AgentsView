@@ -1,6 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
 
-const isDuckDBBackend = process.env.AGENTSVIEW_E2E_BACKEND === "duckdb";
 const mappingWorkspaceE2EEnabled = process.env.PROJECT_MAPPING_WORKSPACE_E2E_ENABLED === "true";
 const wrongProject = "wrong_branch_label";
 const targetProject = "sample_service";
@@ -36,7 +35,7 @@ test.describe("Data mode project reclassification", () => {
   );
 
   test.afterEach(async ({ request, baseURL, browserName }) => {
-    if (!mappingWorkspaceE2EEnabled || isDuckDBBackend || browserName !== "chromium") return;
+    if (!mappingWorkspaceE2EEnabled || browserName !== "chromium") return;
 
     // Restore the shared fixture even when an assertion fails after Save.
     // Deleting the rule alone does not undo the session reclassification.
@@ -68,7 +67,6 @@ test.describe("Data mode project reclassification", () => {
   test("keeps the bulk destination and Save visible while observed folders scroll", async ({
     page,
   }) => {
-    test.skip(isDuckDBBackend, "requires correction controls");
     const project = {
       project_key: "layout-fixture",
       label: "project-a",
@@ -187,8 +185,6 @@ test.describe("Data mode project reclassification", () => {
   test("reclassifies a worktree from Activity through Data and persists a rule", async ({
     page,
   }) => {
-    test.skip(isDuckDBBackend, "requires the writable SQLite archive");
-
     let reclassifyMutations = 0;
     const legacyCandidateRequests: string[] = [];
     page.on("request", (request) => {
@@ -299,59 +295,5 @@ test.describe("Data mode project reclassification", () => {
     await expect(rule).toContainText("On");
 
     expect(legacyCandidateRequests).toEqual([]);
-  });
-
-  test("stops at the editor read-only notice without offering mutations", async ({ page }) => {
-    test.skip(!isDuckDBBackend, "runs only against duckdb serve");
-
-    const mutationRequests: string[] = [];
-    page.on("request", (request) => {
-      const pathname = new URL(request.url()).pathname;
-      if (request.method() !== "GET" && pathname.startsWith("/api/v1/settings/worktree-mappings")) {
-        mutationRequests.push(`${request.method()} ${pathname}`);
-      }
-    });
-
-    // Wait for version hydration: DataPage also renders read-only while
-    // sync.serverVersion is still null, so the assertions below must run
-    // against the backend's real read_only flag, not the pre-hydration state.
-    const versionPromise = page.waitForResponse(
-      (response) => new URL(response.url()).pathname === "/api/v1/version" && response.ok(),
-    );
-    await page.goto("/data");
-    const versionResponse = await versionPromise;
-    expect(await versionResponse.json()).toMatchObject({ read_only: true });
-    await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible();
-    const row = page.getByRole("row", { name: wrongProject });
-    await expect(row).toBeVisible();
-    await row.click();
-
-    const ws = workspace(page);
-    await expect(ws.getByRole("button", { name: "Folder suggestions" })).toBeVisible();
-    await expect(ws.getByRole("button", { name: worktreeRoot })).toBeVisible();
-    await expect(ws.getByRole("note")).toContainText("Changes are unavailable here.");
-    await expect(ws.getByRole("textbox", { name: "Path prefix" })).toHaveCount(0);
-    await expect(ws.getByRole("button", { name: "Project", exact: true })).toHaveCount(0);
-    await expect(ws.getByRole("button", { name: "Save correction" })).toHaveCount(0);
-
-    expect(mutationRequests).toEqual([]);
-  });
-
-  test("rules view is read-only without actions or the mapping form", async ({ page }) => {
-    test.skip(!isDuckDBBackend, "runs only against duckdb serve");
-
-    // Same version-hydration gate as above: the read-only notice must come
-    // from the backend's read_only flag, not the null pre-hydration state.
-    const versionPromise = page.waitForResponse(
-      (response) => new URL(response.url()).pathname === "/api/v1/version" && response.ok(),
-    );
-    await page.goto("/data?view=rules");
-    const versionResponse = await versionPromise;
-    expect(await versionResponse.json()).toMatchObject({ read_only: true });
-    await expect(page.getByRole("heading", { name: "Worktree mappings" })).toBeVisible();
-    await expect(page.getByRole("note")).toContainText("This store is read-only.");
-    await expect(page.getByRole("button", { name: "Add mapping" })).toHaveCount(0);
-    await expect(page.getByRole("columnheader", { name: "Actions" })).toHaveCount(0);
-    await expect(page.getByText("No worktree mappings configured.")).toBeVisible();
   });
 });

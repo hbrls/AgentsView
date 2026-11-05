@@ -32,10 +32,7 @@ func TestDecideCompactRoute(t *testing.T) {
 			stagingDir: "/tmp/staging",
 			wantErr:    "--staging-dir requires direct archive access",
 		},
-		{
-			name: "read-only pg or duckdb server compacts directly",
-			tr:   transport{Mode: transportHTTP, ReadOnly: true},
-		},
+
 		{
 			name: "read-only server allows staging dir",
 			tr:   transport{Mode: transportHTTP, ReadOnly: true},

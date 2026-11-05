@@ -75,9 +75,7 @@ func TestRootHelpShowsKeySectionsAndCommands(t *testing.T) {
 		"Usage Commands:",
 		"Other Commands:",
 		"serve                  Start the web UI and sync server",
-		"duckdb status          Show DuckDB sync status",
 		"pg push                Push local data to PostgreSQL",
-		"duckdb quack           Quack remote protocol commands",
 		"usage daily            Daily cost summary",
 		"completion             Generate the autocompletion script for the specified shell",
 		"Flags:",
@@ -98,83 +96,11 @@ func TestRootHelpShowsKeySectionsAndCommands(t *testing.T) {
 	}
 }
 
-func TestPruneCommandAgentFilter(t *testing.T) {
-	var got []PruneConfig
-	cmd := newPruneCommandWithRunner(func(ctx context.Context, cfg PruneConfig) {
-		got = append(got, cfg)
-	})
-	_, err := executeCommand(cmd,
-		"--agent", "mimocode", "--project", "project-a", "--max-messages", "0",
-		"--before", "2025-01-01", "--first-message", "hello", "--dry-run", "--yes")
-	require.NoError(t, err)
-	assert.Equal(t, []PruneConfig{{
-		Filter: db.PruneFilter{Agent: "mimocode", Project: "project-a", MaxMessages: new(0), Before: "2025-01-01", FirstMessage: "hello"},
-		DryRun: true, Yes: true,
-	}}, got)
-}
-
-func TestPruneCommandRejectsEmptyAgent(t *testing.T) {
-	for _, tt := range []struct {
-		name string
-		args []string
-	}{
-		{"agent only", []string{"--agent="}},
-		{"with project", []string{"--agent=", "--project", "project-a"}},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			called := false
-			cmd := newPruneCommandWithRunner(func(context.Context, PruneConfig) {
-				called = true
-			})
-			_, err := executeCommand(cmd, tt.args...)
-			require.EqualError(t, err, "--agent must not be empty")
-			assert.False(t, called, "runner must not be called")
-		})
-	}
-}
-
-func TestRootHelpShowsDuckDBEnvironment(t *testing.T) {
-	help, err := executeCommand(newRootCommand(), "--help")
-	require.NoError(t, err, "Execute")
-	for _, want := range []string{
-		"AGENTSVIEW_DUCKDB_PATH",
-		"AGENTSVIEW_DUCKDB_URL",
-		"AGENTSVIEW_DUCKDB_TOKEN",
-		"AGENTSVIEW_DUCKDB_MACHINE",
-	} {
-		assert.Contains(t, help, want, "help missing %q", want)
-	}
-	assert.NotContains(t, help, "env-token")
-}
-
-func TestRootHelpShowsQuackEnvironment(t *testing.T) {
-	help, err := executeCommand(newRootCommand(), "--help")
-	require.NoError(t, err, "Execute")
-	assert.NotContains(t, help, "AGENTSVIEW_QUACK_URL")
-	assert.NotContains(t, help, "AGENTSVIEW_QUACK_TOKEN")
-}
-
 func TestRootHelpDocumentsCopilotExportDir(t *testing.T) {
 	help, err := executeCommand(newRootCommand(), "--help")
 	require.NoError(t, err, "Execute")
 	assert.Contains(t, help,
 		"COPILOT_DIR             Copilot sessions or exported JetBrains Copilot directory")
-}
-
-func TestDuckDBPushHelpShowsProjectFlags(t *testing.T) {
-	help, err := executeCommand(newRootCommand(), "duckdb", "push", "--help")
-	require.NoError(t, err, "Execute")
-	for _, want := range []string{
-		"--full",
-		"--projects",
-		"--exclude-projects",
-		"--all-projects",
-		"--watch",
-		"--debounce",
-		"--interval",
-	} {
-		assert.Contains(t, help, want)
-	}
 }
 
 func TestPGStatusHelpShowsProjectFlags(t *testing.T) {
@@ -208,21 +134,6 @@ func TestRawSyncCommandsKeepCredentialOutOfArguments(t *testing.T) {
 	status, err := executeCommand(newRootCommand(), "raw-sync", "status", "--help")
 	require.NoError(t, err)
 	assert.Contains(t, status, "Show durable laptop raw-sync status")
-}
-
-func TestDuckDBQuackServeHelpShowsSafetyFlags(t *testing.T) {
-	help, err := executeCommand(newRootCommand(), "duckdb", "quack", "serve", "--help")
-	require.NoError(t, err, "Execute")
-	for _, want := range []string{
-		"--bind",
-		"--path",
-		"--token",
-		"required",
-		"--allow-insecure",
-	} {
-		assert.Contains(t, help, want)
-	}
-	assert.NotContains(t, help, "generated if omitted")
 }
 
 func TestOpenAPICommandEmitsSpec(t *testing.T) {

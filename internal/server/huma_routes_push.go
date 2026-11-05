@@ -71,22 +71,8 @@ func newReplicaPushProgressLogger(name string) func(storage.PushProgress) {
 	}
 }
 
-// newMirrorPushProgressLogger is newReplicaPushProgressLogger's mirror analog.
-func newMirrorPushProgressLogger(name string) func(storage.MirrorPushProgress) {
-	var last time.Time
-	return func(p storage.MirrorPushProgress) {
-		if time.Since(last) < pushProgressLogInterval {
-			return
-		}
-		last = time.Now()
-		log.Printf("%s push: %d/%d session(s), %d messages",
-			name, p.SessionsDone, p.SessionsTotal, p.MessagesDone)
-	}
-}
-
 // registerPushRoutes exposes one daemon-delegated push route per registered
-// backend: /api/v1/push/<replica name> for each replica and
-// /api/v1/push/<mirror name> for the mirror. A server built without backends
+// replica at /api/v1/push/<replica name>. A server built without replicas
 // has no push routes.
 func (s *Server) registerPushRoutes() {
 	group := huma.NewGroup(s.api, "/api/v1/push")
@@ -96,12 +82,6 @@ func (s *Server) registerPushRoutes() {
 		s.stream(group, http.MethodPost, "/"+replica.Name(),
 			"Push to "+replica.DisplayName(),
 			s.replicaPushHandler(replica), streamJSONResponse(),
-		)
-	}
-	if s.mirror != nil {
-		s.stream(group, http.MethodPost, "/"+s.mirror.Name(),
-			"Push to "+s.mirror.DisplayName(),
-			s.humaMirrorPush, streamJSONResponse(),
 		)
 	}
 }
@@ -195,7 +175,7 @@ type daemonPushRequest struct {
 	// Replica is the remote target a replica push writes to. Omitted, the
 	// daemon pushes to its own default configured target for that backend.
 	Replica *daemonReplicaTarget `json:"replica,omitempty"`
-	DuckDB  *config.DuckDBConfig `json:"duckdb,omitempty"`
+
 	// SyncStateTarget and MigrateLegacySyncState scope the archive-side push
 	// watermarks; see storage.ReplicaTargetRef.
 	SyncStateTarget        string `json:"sync_state_target,omitempty"`
@@ -210,15 +190,9 @@ type daemonPushRequest struct {
 	// LastReconciledVectorGeneration travels with a scoped push so this
 	// request's fresh pusher can promote to generation-wide when the active
 	// generation id has changed (see storage.PushOptions).
-	LastReconciledVectorGeneration int64 `json:"last_reconciled_vector_generation,omitzero"`
-	// Automatic is set by the CLI's watch-mode mirror pushes: a mirror
-	// held by a live serve process defers instead of rebuilding the whole
-	// archive on every changed batch, and archive-scale diagnostics are
-	// skipped (see storage.MirrorPushOptions.Automatic). Explicit pushes
-	// leave it unset and do neither.
-	Automatic     bool                        `json:"automatic,omitzero"`
-	WatchBatch    *syncpkg.WatchBatch         `json:"watch_batch,omitempty"`
-	WatchRecovery *syncpkg.WatchRecoveryScope `json:"watch_recovery,omitempty"`
+	LastReconciledVectorGeneration int64                       `json:"last_reconciled_vector_generation,omitzero"`
+	WatchBatch                     *syncpkg.WatchBatch         `json:"watch_batch,omitempty"`
+	WatchRecovery                  *syncpkg.WatchRecoveryScope `json:"watch_recovery,omitempty"`
 }
 
 // daemonReplicaTarget is the wire shape of a delegated push's remote target.
@@ -304,67 +278,6 @@ func (s *Server) replicaPushTarget(
 		return storage.ReplicaTarget{}, err
 	}
 	return target.Target, nil
-}
-
-// duckDBPushConfig resolves the DuckDB config a daemon push writes to. The
-// mirror PATH is always the server's own resolved configuration: the request
-// body is attacker-reachable for any authenticated API caller, and honoring a
-// caller-supplied path verbatim would let a push's rebuild rename a DuckDB
-// mirror over any file the daemon can write (including the primary
-// sessions.db). Non-path fields from a request-supplied config (machine
-// name, filters, url — the latter still rejected by ValidatePushTarget)
-// keep applying as before; a request that names a different path than the
-// server's is rejected instead of redirected.
-//
-// The CLI never sends a path (it defers to the server's pinned path): the
-// normalization below absolutizes relative paths against THIS process's
-// cwd, so a configured relative path could absolutize differently in the
-// CLI and the daemon and spuriously fail the equality check. The mismatch
-// rejection stays for third-party API callers.
-func (s *Server) mirrorPushConfig(
-	req daemonPushRequest,
-) (config.DuckDBConfig, error) {
-	resolved, err := s.cfg.ResolveDuckDB()
-	if err != nil {
-		return config.DuckDBConfig{}, err
-	}
-	if req.DuckDB == nil {
-		return resolved, nil
-	}
-	duckCfg := *req.DuckDB
-	requested := normalizeDuckDBMirrorPath(duckCfg.Path)
-	if requested != "" && requested != normalizeDuckDBMirrorPath(resolved.Path) {
-		return config.DuckDBConfig{}, fmt.Errorf(
-			"daemon duckdb pushes write only the server-configured mirror path %s; "+
-				"requested path %s is not allowed — change the server's "+
-				"[duckdb].path (or AGENTSVIEW_DUCKDB_PATH) to push to a "+
-				"different file", resolved.Path, duckCfg.Path,
-		)
-	}
-	duckCfg.Path = resolved.Path
-	return duckCfg, nil
-}
-
-// normalizeDuckDBMirrorPath canonicalizes a mirror path for the equality
-// check above; "" stays "" so an unset request path always defers to the
-// server's own path.
-func normalizeDuckDBMirrorPath(path string) string {
-	if path == "" {
-		return ""
-	}
-	abs, err := filepath.Abs(filepath.Clean(path))
-	if err != nil {
-		return filepath.Clean(path)
-	}
-	return abs
-}
-
-func mirrorPushOptions(req daemonPushRequest) storage.MirrorPushOptions {
-	return storage.MirrorPushOptions{
-		Projects:        req.Projects,
-		ExcludeProjects: req.ExcludeProjects,
-		Automatic:       req.Automatic,
-	}
 }
 
 func validatePushWatchScope(
@@ -791,75 +704,6 @@ func (s *Server) humaReplicaPush(
 					return err
 				},
 			)
-			return result, err
-		})
-	}}, nil
-}
-
-func (s *Server) humaMirrorPush(
-	ctx context.Context,
-	in *daemonPushInput,
-) (*huma.StreamResponse, error) {
-	if err := storage.ValidateProjectFilters(
-		in.Body.Projects,
-		in.Body.ExcludeProjects,
-	); err != nil {
-		return nil, apiError(http.StatusBadRequest, err.Error())
-	}
-	local, err := s.localPushTarget(ctx)
-	if err != nil {
-		return nil, err
-	}
-	// Reject before the stream body flushes a 200 so SSE clients see the
-	// 503 + Retry-After (mirrors humaReplicaPush).
-	if local.WriterClosed() {
-		return nil, writerClosedError(s.archiveStale())
-	}
-	duckCfg, err := s.mirrorPushConfig(in.Body)
-	if err != nil {
-		return nil, apiError(http.StatusBadRequest, err.Error())
-	}
-	if err := s.mirror.ValidatePushTarget(duckCfg); err != nil {
-		return nil, apiError(http.StatusBadRequest, err.Error())
-	}
-
-	engine := s.syncEngineForLocal(ctx, local)
-	push := archivepush.MirrorPush{
-		Mirror: s.mirror, Config: duckCfg, Archive: local,
-		Options: mirrorPushOptions(in.Body),
-		EnsurePricing: func(c context.Context) error {
-			return s.ensurePricing(c, local)
-		},
-	}
-	body := in.Body
-	name := s.mirror.Name()
-	return &huma.StreamResponse{Body: func(hctx huma.Context) {
-		runPushStream(hctx, func(
-			streamProgress, streamPhase func(storage.MirrorPushProgress),
-		) (any, error) {
-			onProgress := composePushProgress(
-				newMirrorPushProgressLogger(name), streamProgress,
-			)
-			var result storage.MirrorPushResult
-			var rebuilt bool
-			reportPhase := func(phase string) {
-				rebuilt = rebuilt || phase == storage.PushPhaseRebuilt
-				logPushPhase(name, phase)
-				if streamPhase != nil {
-					streamPhase(storage.MirrorPushProgress{Phase: phase})
-				}
-			}
-			pushCtx := db.WithWriterWaitNotice(ctx, func() {
-				reportPhase(storage.PushPhaseWaitingForSync)
-			})
-			err := s.syncThenRunForPush(pushCtx, engine, local, body.Full, nil, nil,
-				reportPhase,
-				func(forceFull bool) error {
-					var pushErr error
-					result, pushErr = push.Push(pushCtx, forceFull, onProgress)
-					result.ArchiveRebuilt = rebuilt
-					return pushErr
-				})
 			return result, err
 		})
 	}}, nil

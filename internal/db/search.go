@@ -70,7 +70,6 @@ type systemPrefixSQLDialect int
 const (
 	systemPrefixSQLite systemPrefixSQLDialect = iota
 	systemPrefixPostgres
-	systemPrefixDuckDB
 )
 
 // SystemPrefixSQL returns a SQL clause that excludes user messages
@@ -84,11 +83,6 @@ func SystemPrefixSQL(contentCol, roleCol string) string {
 // PostgresSystemPrefixSQL is the PostgreSQL form of SystemPrefixSQL.
 func PostgresSystemPrefixSQL(contentCol, roleCol string) string {
 	return systemPrefixSQL(contentCol, roleCol, systemPrefixPostgres)
-}
-
-// DuckDBSystemPrefixSQL is the DuckDB form of SystemPrefixSQL.
-func DuckDBSystemPrefixSQL(contentCol, roleCol string) string {
-	return systemPrefixSQL(contentCol, roleCol, systemPrefixDuckDB)
 }
 
 func systemPrefixSQL(

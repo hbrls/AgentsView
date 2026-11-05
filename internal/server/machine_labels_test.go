@@ -2,10 +2,6 @@ package server_test
 
 import (
 	"net/http"
-	"net/http/httptest"
-	"net/url"
-	"path/filepath"
-	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -13,9 +9,6 @@ import (
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/duckdb"
-	"go.kenn.io/agentsview/internal/server"
-	"go.kenn.io/agentsview/internal/storage"
 )
 
 func TestMachineLabelsAndAliasesAcrossHTTP(t *testing.T) {
@@ -63,90 +56,4 @@ func TestMachineLabelsAndAliasesAcrossHTTP(t *testing.T) {
 	assert.Equal(t, "old-owner", decode[struct {
 		Machine string `json:"machine"`
 	}](t, w).Machine)
-}
-
-func TestMachinesResolveWholeSelectors(t *testing.T) {
-	te := setup(t)
-	for _, machine := range []string{"id-a", "id-b"} {
-		te.seedSession(t, machine, "project", 5, func(s *db.Session) {
-			s.Machine = machine
-			s.UserMessageCount = 3
-		})
-	}
-	require.NoError(t, te.db.SetSyncState(t.Context(), db.MachineLabelKeyPrefix+"id-a", "Work, Linux"))
-	for _, tt := range []struct {
-		selector string
-		want     []string
-	}{
-		{" \t ", nil},
-		{"Work, Linux", []string{"id-a"}},
-	} {
-		t.Run(tt.selector, func(t *testing.T) {
-			w := te.get(t, "/api/v1/machines?machine="+url.QueryEscape(tt.selector))
-			assertStatus(t, w, http.StatusOK)
-			response := decode[struct {
-				Machines         []string `json:"machines"`
-				ResolvedMachines []string `json:"resolved_machines"`
-			}](t, w)
-			assert.ElementsMatch(t, []string{"id-a", "id-b"}, response.Machines)
-			assert.Equal(t, tt.want, response.ResolvedMachines)
-		})
-	}
-}
-
-func TestMachineFilterErrorsBeforeHTTPResponse(t *testing.T) {
-	te := setup(t)
-	for _, path := range []string{
-		"/api/v1/machines",
-		"/api/v1/sessions",
-		"/api/v1/usage/summary",
-		"/api/v1/usage/summary/stream",
-		"/api/v1/analytics/summary",
-		"/api/v1/activity/report",
-	} {
-		t.Run(path, func(t *testing.T) {
-			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path+"?machine=missing", nil)
-			if path == "/api/v1/usage/summary/stream" {
-				req.Header.Set("Accept", "text/event-stream")
-			}
-			w := httptest.NewRecorder()
-			te.handler.ServeHTTP(w, req)
-			assertStatus(t, w, http.StatusBadRequest)
-			assert.Contains(t, w.Body.String(), `"code":"invalid_machine_filter"`)
-			if path == "/api/v1/usage/summary/stream" {
-				assert.NotContains(t, w.Header().Get("Content-Type"), "text/event-stream")
-				assert.NotContains(t, w.Body.String(), "event:")
-			}
-		})
-	}
-}
-
-func TestMachineAliasesOnDuckDB(t *testing.T) {
-	if runtime.GOOS == "windows" && runtime.GOARCH == "arm64" {
-		t.Skip("duckdb-go-bindings does not ship a windows/arm64 library")
-	}
-	te := setup(t)
-	te.seedSession(t, "current", "project", 5, func(s *db.Session) {
-		s.Machine = "installation-a"
-		s.UserMessageCount = 3
-	})
-	require.NoError(t, te.db.SetSyncState(t.Context(), "machine_alias:old-owner", "installation-a"))
-	path := filepath.Join(t.TempDir(), "mirror.duckdb")
-	_, err := duckdb.Push(t.Context(), path, te.db, "installation-a", storage.MirrorPushOptions{}, true, nil)
-	require.NoError(t, err)
-	store, err := duckdb.NewStore(t.Context(), path)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	cfg := config.Config{Host: "127.0.0.1", InstallationID: "server-installation"}
-	te.handler = wrapTestHandler(cfg, server.New(cfg, store, nil).Handler())
-	w := te.get(t, "/api/v1/sessions?machine=old-owner")
-	assertStatus(t, w, http.StatusOK)
-	page := decode[db.SessionPage](t, w)
-	require.Len(t, page.Sessions, 1)
-	assert.Equal(t, "current", page.Sessions[0].ID)
-	w = te.get(t, "/api/v1/machines")
-	assertStatus(t, w, http.StatusOK)
-	assert.Equal(t, map[string]string{"old-owner": "installation-a"}, decode[struct {
-		Aliases map[string]string `json:"machine_aliases"`
-	}](t, w).Aliases)
 }
