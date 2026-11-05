@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/doordash-oss/oapi-codegen-dd/v3/pkg/runtime"
-
 	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/storage"
@@ -48,21 +47,21 @@ func replicaPushOperation(name string) (daemonPushOperation, error) {
 			"replica backend %q has no daemon push operation; "+
 				"regenerate the API client and register it in replicaPushOperations",
 			name,
-		)
-	}
-	return operation, nil
-}
+)
 
-func startupSyncOperation(
-	ctx context.Context, api *apiclient.Client, _ *apiclient.DaemonPushRequest,
-) (*http.Response, []byte, *runtime.Stream[[]byte], error) {
-	response, err := api.PostAPIV1SyncStreamWithResponse(
-		ctx, &apiclient.PostAPIV1SyncRequestOptions{
-			Query: &apiclient.PostAPIV1SyncQuery{Wait: new(true), StartupOnly: new(true)},
-		},
-	)
+// waitForStartupSync waits for the local daemon's initial sync, forwarding
+// progress when the daemon returns an event stream.
+func waitForStartupSync(ctx context.Context, tr transport, authToken string, onProgress func(syncpkg.Progress)) (syncpkg.SyncStats, error) {
+	var zero syncpkg.SyncStats
+	api, err := apiclient.NewHTTPClient(tr.URL, authToken, &http.Client{Timeout: 0})
+	if err != nil {
+		return zero, err
+	}
+	response, err := api.PostAPIV1SyncStreamWithResponse(ctx, &apiclient.PostAPIV1SyncRequestOptions{
+		Query: &apiclient.PostAPIV1SyncQuery{Wait: new(true), StartupOnly: new(true)},
+	})
 	if response == nil {
-		return nil, nil, nil, err
+		return zero, err
 	}
 	return response.HTTPResponse, response.Body, response.Stream200, nil
 }
@@ -135,15 +134,15 @@ func daemonRejectsWatchScope(status int, body []byte) bool {
 	if status != http.StatusBadRequest && status != http.StatusUnprocessableEntity {
 		return false
 	}
-	message := strings.ToLower(string(body))
-	if !strings.Contains(message, "watch_batch") &&
-		!strings.Contains(message, "watch_recovery") {
-		return false
 	}
-	return strings.Contains(message, "unexpected") ||
-		strings.Contains(message, "unknown") ||
-		strings.Contains(message, "additional") ||
-		strings.Contains(message, "not allowed")
+	if strings.HasPrefix(response.HTTPResponse.Header.Get("Content-Type"), "text/event-stream") {
+		return consumeDaemonPushEvents[syncpkg.SyncStats](response.Stream200, onProgress)
+	}
+	var out syncpkg.SyncStats
+	if err := json.Unmarshal(response.Body, &out); err != nil {
+		return zero, err
+	}
+	return out, nil
 }
 
 // consumeDaemonPushEvents applies daemon progress and terminal events decoded

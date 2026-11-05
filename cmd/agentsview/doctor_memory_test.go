@@ -194,7 +194,6 @@ func setDoctorMemoryTestEnvironment(t *testing.T, home string) {
 	for _, name := range []string{
 		"AGENTSVIEW_MEMORY_SERVER",
 		"AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE",
-		"AGENTSVIEW_MEMORY_PG",
 		"PLUGIN_ROOT",
 		"CLAUDE_PLUGIN_ROOT",
 	} {

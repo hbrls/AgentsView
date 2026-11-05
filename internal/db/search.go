@@ -69,7 +69,6 @@ type systemPrefixSQLDialect int
 
 const (
 	systemPrefixSQLite systemPrefixSQLDialect = iota
-	systemPrefixPostgres
 )
 
 // SystemPrefixSQL returns a SQL clause that excludes user messages
@@ -78,11 +77,6 @@ const (
 // position checks instead of LIKE, which is case-insensitive on SQLite.
 func SystemPrefixSQL(contentCol, roleCol string) string {
 	return systemPrefixSQL(contentCol, roleCol, systemPrefixSQLite)
-}
-
-// PostgresSystemPrefixSQL is the PostgreSQL form of SystemPrefixSQL.
-func PostgresSystemPrefixSQL(contentCol, roleCol string) string {
-	return systemPrefixSQL(contentCol, roleCol, systemPrefixPostgres)
 }
 
 func systemPrefixSQL(
@@ -236,9 +230,6 @@ func sqlPosition(
 	dialect systemPrefixSQLDialect, needle, haystack string,
 ) string {
 	quotedNeedle := "'" + needle + "'"
-	if dialect == systemPrefixPostgres {
-		return fmt.Sprintf("POSITION(%s IN %s)", quotedNeedle, haystack)
-	}
 	return fmt.Sprintf("instr(%s, %s)", haystack, quotedNeedle)
 }
 

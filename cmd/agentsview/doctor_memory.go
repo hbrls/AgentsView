@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -95,8 +94,6 @@ func newDoctorMemoryCommand() *cobra.Command {
 	cmd.Flags().String("server", "", "Remote daemon URL")
 	cmd.Flags().String("server-token-file", "",
 		"File containing bearer token for explicit --server requests")
-	cmd.Flags().Bool("pg", false,
-		"Read memory readiness from configured PostgreSQL")
 	cmd.Flags().StringVar(&pluginRoot, "plugin-root", "",
 		"Native memory plugin root to inspect")
 	registerFormatFlags(cmd.Flags())
@@ -115,19 +112,6 @@ func resolveDoctorMemoryService(
 	if err != nil {
 		return nil, nil, fmt.Errorf("loading config: %w", err)
 	}
-	if selection.Kind == "postgresql" {
-		pgCfg, usePG, err := resolvePGReadConfig(cmd, cfg)
-		if err != nil {
-			return nil, nil, err
-		}
-		if !usePG {
-			return nil, nil, errors.New("doctor memory: PostgreSQL target was not selected")
-		}
-		if err := cfg.ApplyDeploymentEmbeddings(); err != nil {
-			return nil, nil, fmt.Errorf("loading deployment embeddings: %w", err)
-		}
-		return newPGReadService(cfg, pgCfg)
-	}
 	// A direct read-only archive handle exposes the same bounded readiness
 	// provider without starting a daemon or scheduling sync work.
 	return newService(cmd.Context(), cfg, transport{Mode: transportDirect})
@@ -138,9 +122,6 @@ func doctorMemorySelection(cmd *cobra.Command) doctorMemoryTargetSelection {
 	server = strings.TrimRight(strings.TrimSpace(server), "/")
 	if server != "" {
 		return doctorMemoryTargetSelection{Kind: "server", server: server}
-	}
-	if pgReadRequested(cmd) {
-		return doctorMemoryTargetSelection{Kind: "postgresql"}
 	}
 	return doctorMemoryTargetSelection{Kind: "local"}
 }

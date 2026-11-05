@@ -24,7 +24,6 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
-	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/servicehttp"
@@ -101,9 +100,6 @@ func sessionUsageDataForCommand(
 
 	remote, _ := cmd.Flags().GetString("server")
 	if remote != "" {
-		if pgReadRequested(cmd) {
-			return nil, tokenUseExitErr, errors.New("--server and --pg are mutually exclusive")
-		}
 		token, err := explicitServerToken(cmd)
 		if err != nil {
 			return nil, tokenUseExitErr, err
@@ -120,13 +116,6 @@ func sessionUsageDataForCommand(
 	cfg, err := config.LoadPFlagsFor(cmd.Flags(), config.ScopeLocal)
 	if err != nil {
 		return nil, tokenUseExitErr, fmt.Errorf("loading config: %w", err)
-	}
-	if pgReadRequested(cmd) {
-		pgCfg, _, err := resolvePGReadConfig(cmd, cfg)
-		if err != nil {
-			return nil, tokenUseExitErr, err
-		}
-		return pgSessionUsageData(cfg, pgCfg, query)
 	}
 	backend, cleanup, err := resolveArchiveQueryBackendWithConfig(
 		ctx,
@@ -174,8 +163,7 @@ func requireRemoteSubagentUsageSupport(
 
 func readOnlySessionUsageDaemonError(url string) error {
 	return fmt.Errorf(
-		"daemon at %s is read-only; use --pg to query "+
-			"a read-only mirror, or stop it to refresh local "+
+		"daemon at %s is read-only; stop it to refresh local "+
 			"session usage",
 		url,
 	)
@@ -294,92 +282,6 @@ func httpSessionUsageData(
 		out.SubagentCount = int(*wire.SubagentCount)
 	}
 	return &out, usageExitCode(&out), nil
-}
-
-func httpSessionSyncStatus(
-	ctx context.Context, baseURL, token string,
-) (startupPending, archiveStale bool, err error) {
-	api, err := apiclient.NewHTTPClient(baseURL, token, sessionUsageHTTPClient)
-	if err != nil {
-		return false, false, err
-	}
-	response, err := api.GetAPIV1SyncStatusWithResponse(ctx)
-	if err != nil {
-		return false, false, err
-	}
-	if response == nil {
-		return false, false, io.ErrUnexpectedEOF
-	}
-	if response.JSON200 == nil {
-		return false, false, fmt.Errorf(
-			"sync status: HTTP %d: %s", response.StatusCode, response.Body,
-		)
-	}
-	return response.JSON200.StartupPending, response.JSON200.ArchiveStale, nil
-}
-
-func pgSessionUsageData(
-	cfg config.Config, pgCfg config.PGConfig, query sessionUsageQuery,
-) (*sessionUsageOutput, int, error) {
-	store, cleanup, err := openPGReadStore(cfg, pgCfg)
-	if err != nil {
-		if cleanup != nil {
-			cleanup()
-		}
-		return nil, tokenUseExitErr, fmt.Errorf("opening pg store: %w", err)
-	}
-	if cleanup != nil {
-		defer cleanup()
-	}
-	return storeSessionUsageData("pg", cfg, store, query)
-}
-
-func storeSessionUsageData(
-	storeName string,
-	cfg config.Config,
-	store db.Store,
-	query sessionUsageQuery,
-) (*sessionUsageOutput, int, error) {
-	if len(cfg.CustomModelPricing) > 0 {
-		if priced, ok := store.(customPricingStore); ok {
-			priced.SetCustomPricing(cfg.CustomModelPricing)
-		}
-	}
-
-	ctx := context.Background()
-	sessionID := query.SessionID
-	resolvedID, err := resolveStoreSessionID(ctx, store, sessionID)
-	if err != nil {
-		if !errors.Is(err, errSessionNotFound) {
-			return nil, tokenUseExitErr,
-				fmt.Errorf("resolving %s session id: %w", storeName, err)
-		}
-		fmt.Fprintf(os.Stderr, "session not found: %s\n", sessionID)
-		return nil, tokenUseExitNotFound, nil
-	}
-
-	var u *db.SessionUsage
-	if query.OwnOnly {
-		u, err = store.GetSessionUsage(ctx, resolvedID, true)
-	} else {
-		u, err = service.SessionUsageWithSubagents(
-			ctx, store, resolvedID, true)
-	}
-	if err != nil {
-		return nil, tokenUseExitErr,
-			fmt.Errorf("querying %s session usage: %w", storeName, err)
-	}
-	if u == nil {
-		fmt.Fprintf(os.Stderr, "session not found: %s\n", sessionID)
-		return nil, tokenUseExitNotFound, nil
-	}
-	if u.Agent == "" {
-		if def, ok := parser.AgentByPrefix(u.SessionID); ok {
-			u.Agent = string(def.Type)
-		}
-	}
-	out := newStoreSessionUsageOutput(u)
-	return out, usageExitCode(out), nil
 }
 
 func resolveStoreSessionID(
