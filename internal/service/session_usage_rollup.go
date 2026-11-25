@@ -164,7 +164,7 @@ func delegatedDescendantsFrom(
 		delegated bool
 	}
 	visited := map[walkState]struct{}{
-		{id: rootID, delegated: rootDelegated}: {},
+		{id: rootID}: {},
 	}
 	included := make(map[string]struct{})
 	level := []walkState{{id: rootID, delegated: rootDelegated}}
