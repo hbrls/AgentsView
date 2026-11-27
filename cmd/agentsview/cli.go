@@ -13,7 +13,6 @@ import (
 
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/activity"
-	"go.kenn.io/agentsview/internal/clickhouse"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/server"
@@ -126,7 +125,6 @@ func newRootCommand() *cobra.Command {
 	root.AddCommand(newActivityCommand())
 	root.AddCommand(newPGCommand())
 	root.AddCommand(newRawSyncCommand())
-	root.AddCommand(newClickHouseCommand())
 	root.AddCommand(newEmbeddingsCommand())
 	root.AddCommand(newSessionCommand())
 	root.AddCommand(newMCPCommand())
@@ -750,13 +748,6 @@ func newPGCommand() *cobra.Command {
 	cmd.Long = "Mirror archived SQLite data to PostgreSQL and serve the mirror through a read-only API. " +
 		"Configure a PostgreSQL target before pushing or inspecting status. " +
 		"Mirror reads do not ingest local provider sources."
-	return cmd
-}
-
-func newClickHouseCommand() *cobra.Command {
-	cmd := newReplicaCommand(clickhouse.Backend{}, newClickHouseServiceCommand())
-	cmd.Long = "Mirror local archived data to ClickHouse and serve read-only queries against that mirror. " +
-		"Configure a ClickHouse target before push, status, or serving."
 	return cmd
 }
 

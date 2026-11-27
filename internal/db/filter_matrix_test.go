@@ -20,8 +20,6 @@ type filterMatrixDialect struct {
 var filterMatrixDialects = []filterMatrixDialect{
 	{"sqlite", SQLiteQueryDialect(), "1", "0", "COALESCE(NULLIF(s.ended_at, ''), NULLIF(s.started_at, ''), s.created_at) >= ?", "m.id = tc.message_id", `tc.file_path LIKE ? ESCAPE '\'`},
 	{"postgres", PostgresQueryDialect(), "TRUE", "FALSE", "COALESCE(s.ended_at, s.started_at, s.created_at) >= ?::timestamptz", "m.session_id = tc.session_id AND m.ordinal = tc.message_ordinal", `tc.file_path ILIKE ? ESCAPE E'\\'`},
-	{"duckdb", DuckDBQueryDialect(), "TRUE", "FALSE", "COALESCE(s.ended_at, s.started_at, s.created_at) >= CAST(? AS TIMESTAMP)", "m.session_id = tc.session_id AND m.id = tc.message_id", `tc.file_path ILIKE ? ESCAPE '\'`},
-	{"clickhouse", ClickHouseQueryDialect(), "true", "false", "COALESCE(s.ended_at, s.started_at, s.created_at) >= parseDateTime64BestEffort(?, 6, 'UTC')", "m.session_id = tc.session_id AND m.ordinal = tc.message_ordinal", "tc.file_path ILIKE ?"},
 }
 
 func matrixSQL(d filterMatrixDialect, sql string, offset int) string {
@@ -91,9 +89,6 @@ func TestFilterMatrixAnalytics(t *testing.T) {
 			dates := []string{"s.started_at >= " + b.Add("from"), "s.started_at <= " + b.Add("to")}
 			modelSQL := "EXISTS (SELECT 1 FROM messages m WHERE m.session_id = s.id AND m.model IN (?,?))"
 			term := "(s.termination_status = 'clean' OR s.termination_status = 'awaiting_user')"
-			if d.name == "clickhouse" {
-				modelSQL = "s.id IN (SELECT m.session_id FROM messages m WHERE m.model IN (?,?))"
-			}
 			want := "s.message_count > 0 AND 1=1 AND s.deleted_at IS NULL AND s.started_at >= ? AND s.started_at <= ? AND s.machine IN (?,?) AND s.project = ? AND ((s.project = ? AND s.git_branch = ?) OR (s.project = ? AND s.git_branch = ?)) AND s.agent IN (?,?) AND " + modelSQL + " AND s.user_message_count >= ? AND ((s.user_message_count > 1 OR s.is_automated = " + d.trueSQL + ") OR s.relationship_type = 'subagent') AND " + d.activity + " AND " + term
 			assert.Equal(t, matrixSQL(d, want, 2), BuildAnalyticsWhere(f, b, "s.", "", dates))
 			assert.Equal(t, []any{"from", "to", "laptop", "server", "team,tools", "team,tools", "main", "other", "topic", "codex", "claude", "model-a", "model-b", 2, f.ActiveSince}, b.Args())
@@ -148,10 +143,6 @@ func TestFilterMatrixTermination(t *testing.T) {
 			switch d.name {
 			case "sqlite":
 				activity = "CAST(strftime('%s', COALESCE(NULLIF(s.ended_at, ''), NULLIF(s.started_at, ''), s.created_at)) AS INTEGER)"
-			case "duckdb":
-				ph = "CAST(? AS TIMESTAMP)"
-			case "clickhouse":
-				ph = "parseDateTime64BestEffort(?, 6, 'UTC')"
 			}
 			flagged := "s.termination_status IN ('tool_call_pending', 'truncated')"
 			active := activity + " > " + ph

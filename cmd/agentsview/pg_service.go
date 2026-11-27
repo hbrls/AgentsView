@@ -25,15 +25,6 @@ func newPGServiceCommand() *cobra.Command {
 	return cmd
 }
 
-func newClickHouseServiceCommand() *cobra.Command {
-	cmd := newServiceCommands(clickHouseServiceKind)
-	cmd.Long = "Install and manage the optional background service that pushes archive changes to ClickHouse. " +
-		"Installation and removal change the host's service manager."
-	cmd.Example = "  agentsview replica clickhouse service status\n" +
-		"  agentsview replica clickhouse service install --help"
-	return cmd
-}
-
 func newServiceCommands(kind serviceKind) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:          "service",
