@@ -16,7 +16,11 @@ const (
 	pricingRefreshJitter   = 5 * time.Minute
 )
 
-func pricingRefreshJob(database *db.DB, runner remoteSyncExclusiveRunner) poller.Job {
+type pricingExclusiveRunner interface {
+	RunExclusive(func() error) error
+}
+
+func pricingRefreshJob(database *db.DB, runner pricingExclusiveRunner) poller.Job {
 	return poller.Job{
 		Name:       pricingRefreshJobName,
 		Interval:   pricingRefreshInterval,
@@ -38,7 +42,7 @@ type usageCacheRewarmer interface {
 
 // runPricingRefresh re-warms usage rollups once the refresh has committed any pricing write, even a partial one.
 func runPricingRefresh(
-	ctx context.Context, runner remoteSyncExclusiveRunner,
+	ctx context.Context, runner pricingExclusiveRunner,
 	refresh func(context.Context) error, rewarmer usageCacheRewarmer,
 ) error {
 	before, beforeErr := rewarmer.UsagePricingDigest(ctx)
@@ -68,7 +72,7 @@ func runPricingRefresh(
 }
 
 func runPricingExclusive(
-	runner remoteSyncExclusiveRunner,
+	runner pricingExclusiveRunner,
 	work func() error,
 ) error {
 	if runner == nil {

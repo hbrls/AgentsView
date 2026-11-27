@@ -174,7 +174,6 @@ type antigravityCLISource struct {
 
 type antigravityCLISourceSet struct {
 	roots       []string
-	remote      bool
 	remoteRoots map[string]bool
 }
 

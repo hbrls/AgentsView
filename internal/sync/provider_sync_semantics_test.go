@@ -586,65 +586,6 @@ func TestSyncSemanticsUnchangedResultPolicies(t *testing.T) {
 	assert.Equal(t, "semantic:member", forced[0].Session.ID)
 }
 
-func TestOmnigentDependentSourceExpansionPreservesEngineIDPrefixing(
-	t *testing.T,
-) {
-	database := openTestDB(t)
-	container := filepath.Join(t.TempDir(), "chat.db")
-	rootPath := parser.VirtualSourcePath(container, "root")
-	childPath := parser.VirtualSourcePath(container, "child")
-	rootSource := parser.SourceRef{
-		Provider:       parser.AgentOmnigent,
-		Key:            rootPath,
-		DisplayPath:    rootPath,
-		FingerprintKey: rootPath,
-	}
-	childSource := parser.SourceRef{
-		Provider:       parser.AgentOmnigent,
-		Key:            childPath,
-		DisplayPath:    childPath,
-		FingerprintKey: childPath,
-	}
-	provider := &semanticTestProvider{
-		Def: parser.AgentDef{Type: parser.AgentOmnigent, FileBased: true},
-		reconciled: map[string]parser.SourceRef{
-			childPath: childSource,
-		},
-	}
-	parentID := "remote~omnigent:root"
-	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
-		ID:       parentID,
-		Agent:    string(parser.AgentOmnigent),
-		Machine:  "",
-		FilePath: &rootPath,
-	}))
-	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
-		ID:              "remote~omnigent:child",
-		Agent:           string(parser.AgentOmnigent),
-		Machine:         "",
-		ParentSessionID: &parentID,
-		FilePath:        &childPath,
-	}))
-	engine := &Engine{
-		db:      database,
-		machine: "local",
-	}
-
-	expanded, err := engine.expandOmnigentInheritedMetadataSources(
-		t.Context(), provider, []parser.SourceRef{rootSource},
-	)
-
-	require.NoError(t, err)
-	assert.ElementsMatch(t, []parser.SourceRef{rootSource, childSource}, expanded)
-
-	canceled, cancel := context.WithCancel(t.Context())
-	cancel()
-	_, err = engine.expandOmnigentInheritedMetadataSources(
-		canceled, provider, []parser.SourceRef{rootSource},
-	)
-	require.ErrorContains(t, err, "list omnigent parent session machines")
-}
-
 // TestBaselineFailureDoesNotPromoteSkipCache pins the omnigent-only cache
 // deferral: a rowless or cache-after-write container entry may vouch for the
 // source with no stored rows, so a failed ownership baseline must reject it

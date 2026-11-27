@@ -11,7 +11,6 @@ import (
 	"maps"
 	"path/filepath"
 	"slices"
-	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -122,7 +121,7 @@ func (e *Engine) captureSQLiteContainerStates(
 		}
 		for _, agent := range openCodeFamilySQLiteAgents {
 			for _, dir := range e.sources().agentDirs[agent] {
-				if dir == "" || strings.HasPrefix(dir, "s3://") {
+				if dir == "" {
 					continue
 				}
 				addSQLiteContainerState(
@@ -178,7 +177,7 @@ func (e *Engine) captureAgentSQLiteContainerStates(
 	states map[string]parser.SQLiteContainerState,
 ) {
 	for _, dir := range e.sources().agentDirs[agent] {
-		if dir == "" || strings.HasPrefix(dir, "s3://") {
+		if dir == "" {
 			continue
 		}
 		if !containerDirOverlapsRoots(dir, roots) {
@@ -236,7 +235,7 @@ func openCodeContainerPathForChangedPathEvent(
 		return ""
 	}
 	for _, dir := range roots {
-		if dir == "" || strings.HasPrefix(dir, "s3://") {
+		if dir == "" {
 			continue
 		}
 		if container := openCodeContainerPathForEvent(agent, dir, path); container != "" {
@@ -842,7 +841,7 @@ func (e *Engine) sqliteContainerSourceFresh(ctx context.Context, file parser.Dis
 	if !ok || current != trusted.state {
 		return false
 	}
-	fullID := applyIDPrefixToID(e.idPrefix, string(file.Agent)+":"+sessionID)
+	fullID := string(file.Agent) + ":" + sessionID
 	return e.db.GetSessionDataVersion(ctx, fullID) >= db.CurrentDataVersion() &&
 		e.db.GetSessionFilePath(ctx, fullID) == e.effectiveSourcePath(file.Path)
 }
@@ -885,9 +884,7 @@ func (e *Engine) watermarkOnlySQLiteSourceFresh(ctx context.Context,
 	if lookupPath == "" {
 		return 0, false
 	}
-	if e.pathRewriter != nil {
-		lookupPath = e.pathRewriter(lookupPath)
-	}
+
 	_, storedMtime, found := e.db.GetFileInfoByPath(ctx, lookupPath)
 	if !found {
 		return 0, false

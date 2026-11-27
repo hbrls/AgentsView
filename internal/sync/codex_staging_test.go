@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"sort"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1069,28 +1068,4 @@ func sortFindings(findings []db.SecretFinding) {
 	})
 }
 
-func TestCodexStagedStableSnapshotCountsMalformedTail(t *testing.T) {
-	for _, threshold := range []int64{1, 1 << 30} {
-		t.Run(strconv.FormatInt(threshold, 10), func(t *testing.T) {
-			const uuid = "019eb791-cf7d-75c1-8439-9ed74c122d02"
-			root := writeCodexTranscriptRoot(t, uuid, testjsonl.JoinJSONL(
-				testjsonl.CodexSessionMetaJSON(uuid, "/workspace/project-a", "codex_cli_rs", "2026-07-10T07:00:00Z"),
-				testjsonl.CodexMsgJSON("user", "hello", "2026-07-10T07:00:01Z"),
-			)+`{"type":`)
-			database := openTestDB(t)
-			engine := NewEngine(t.Context(), database, EngineConfig{
-				AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}},
-				Machine:   "local", Ephemeral: true,
-				StagedCodexParseMinBytes: threshold, DisableFilesystemProjectDiscovery: true,
-			})
-			t.Cleanup(engine.Close)
-			stats := engine.SyncAll(t.Context(), nil)
-			require.Equal(t, 1, stats.Synced)
-			sess, err := database.GetSessionFull(t.Context(), "codex:"+uuid)
-			require.NoError(t, err)
-			require.NotNil(t, sess)
-			assert.Equal(t, 1, sess.ParserMalformedLines)
-		})
-	}
-}
 

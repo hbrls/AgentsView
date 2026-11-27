@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -43,27 +42,6 @@ func (ctx *cancelOnErrCheckContext) Err() error {
 	}
 	ctx.mu.Unlock()
 	return ctx.Context.Err()
-}
-
-func TestJSONLProviderFingerprintStopsAfterContextCancellation(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "session.jsonl")
-	require.NoError(t, os.WriteFile(
-		path, []byte(strings.Repeat("x", 256*1024)), 0o600,
-	))
-	for _, agent := range []AgentType{AgentClaude, AgentCodex} {
-		t.Run(string(agent), func(t *testing.T) {
-			provider, ok := NewProvider(agent, ProviderConfig{})
-			require.True(t, ok)
-			ctx := newCancelOnErrCheckContext(t, 4)
-
-			_, err := provider.Fingerprint(ctx, SourceRef{
-				Provider: agent,
-				Opaque:   MaterializedFileSource{Path: path},
-			})
-
-			require.ErrorIs(t, err, context.Canceled)
-		})
-	}
 }
 
 func TestClaudeCanceledHeadSniffIsNotCached(t *testing.T) {

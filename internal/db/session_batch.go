@@ -486,12 +486,6 @@ func (db *DB) writeOneSessionBatchTx(
 	}
 	replaceMessages := write.ReplaceMessages ||
 		upsertResult.sourceMissing
-	queueGenerationBefore, queueExistedBefore, err := artifactExportGenerationTx(
-		queries, write.Session.ID,
-	)
-	if err != nil {
-		return 0, err
-	}
 	sessionExists := !upsertResult.inserted
 	replacementTranscriptChanged := false
 	// A transcript whose rows only gain source IDs changes in place, so the
@@ -727,11 +721,6 @@ func (db *DB) writeOneSessionBatchTx(
 				return 0, err
 			}
 		}
-	}
-	if err := enqueueArtifactExportIfGenerationUnchangedTx(
-		queries, write.Session.ID, queueGenerationBefore, queueExistedBefore,
-	); err != nil {
-		return 0, err
 	}
 
 	return len(msgs), nil

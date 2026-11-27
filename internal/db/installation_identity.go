@@ -9,6 +9,9 @@ import (
 	"strings"
 )
 
+// Keep the existing storage key for core ownership, independent of directory exchange.
+const localInstallationStateKey = "artifact_local_installation_id"
+
 const archiveMachineKeysSQL = `SELECT machine FROM sessions
 	UNION SELECT machine FROM worktree_project_mappings
 	UNION SELECT machine FROM project_identity_observations
@@ -67,7 +70,7 @@ func (db *DB) adoptMachineIdentity(
 		return errors.New("installation identity is required")
 	}
 	return db.Update(ctx, func(tx *sql.Tx) error {
-		if err := lockArtifactPublicationTx(ctx, tx); err != nil {
+		if err := lockInstallationIdentityTx(ctx, tx); err != nil {
 			return err
 		}
 		var installed, former string
@@ -77,7 +80,7 @@ func (db *DB) adoptMachineIdentity(
 			return fmt.Errorf("reading installation adoption state: %w", err)
 		}
 		if !explicit && installed != "" {
-			return configureArtifactLocalMachineTx(ctx, tx, identity)
+			return recordInstallationIdentityTx(ctx, tx, identity)
 		}
 		if !explicit && former == "" {
 			keys, err := unownedMachineKeysTx(ctx, tx, identity)
@@ -126,11 +129,11 @@ func (db *DB) adoptMachineIdentity(
 				return err
 			}
 		}
-		// Old hostnames remain filter redirects, not future export authority.
+		// Old hostnames remain filter redirects after ownership is recorded.
 		if _, err := tx.ExecContext(ctx, `DELETE FROM pg_sync_state WHERE key = 'artifact_local_machine_name'`); err != nil {
 			return err
 		}
-		return configureArtifactLocalMachineTx(ctx, tx, identity)
+		return recordInstallationIdentityTx(ctx, tx, identity)
 	})
 }
 
@@ -212,4 +215,23 @@ func adoptMachineRowsTx(ctx context.Context, tx *sql.Tx, machine, identity strin
 	_, err = tx.ExecContext(ctx, `INSERT INTO pg_sync_state(key, value) VALUES (?, ?)
 		ON CONFLICT(key) DO UPDATE SET value = excluded.value`, MachineAliasKeyPrefix+machine, identity)
 	return err
+}
+
+// Reserve the SQLite writer before reading and adopting ownership state.
+func lockInstallationIdentityTx(ctx context.Context, tx *sql.Tx) error {
+	if _, err := tx.ExecContext(ctx, `UPDATE pg_sync_state SET value = value WHERE 0`); err != nil {
+		return fmt.Errorf("locking installation identity transaction: %w", err)
+	}
+	return nil
+}
+
+func recordInstallationIdentityTx(ctx context.Context, tx *sql.Tx, identity string) error {
+	// This existing key also records core archive ownership.
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO pg_sync_state(key, value) VALUES (?, ?)
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value
+		WHERE value != excluded.value`, localInstallationStateKey, identity); err != nil {
+		return fmt.Errorf("persisting local installation identity: %w", err)
+	}
+	return nil
 }

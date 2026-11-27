@@ -43,15 +43,15 @@ func (e *Engine) SetSubagentLinkRetryExclusive(pending bool) {
 	e.subagentLinkPending = pending
 }
 
-func (ids changedSessionLinks) observe(job syncJob, prefix string) {
+func (ids changedSessionLinks) observe(job syncJob) {
 	if job.incremental != nil {
 		ids[job.incremental.sessionID] = struct{}{}
 	}
 	for _, parsed := range job.results {
-		ids[applyIDPrefixToID(prefix, parsed.Session.ID)] = struct{}{}
+		ids[parsed.Session.ID] = struct{}{}
 	}
 	for _, id := range job.excludedSessionIDs {
-		ids[applyIDPrefixToID(prefix, id)] = struct{}{}
+		ids[id] = struct{}{}
 	}
 }
 

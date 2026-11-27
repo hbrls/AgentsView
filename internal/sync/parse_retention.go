@@ -172,9 +172,6 @@ func releaseParseRetentionLeases(leases []*parseRetentionLease) {
 // whole membership. An unknown or partial count returns a larger share and
 // therefore admits fewer parses, never more.
 func (e *Engine) parseRetentionSourceBytes(file parser.DiscoveredFile) int64 {
-	if file.SourceSize > 0 {
-		return file.SourceSize
-	}
 	path := file.Path
 	if file.ProviderSource != nil {
 		if providerPath := providerDiscoveredPath(*file.ProviderSource); providerPath != "" {
