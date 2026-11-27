@@ -673,14 +673,6 @@ func TestInferRelationshipTypes(t *testing.T) {
 	}
 }
 
-func TestRemoteSyncExcludedAgent(t *testing.T) {
-	assert.True(t, RemoteSyncExcludedAgent(AgentTrae))
-	assert.True(t, RemoteSyncExcludedAgent(AgentOmnigent))
-	assert.True(t, RemoteSyncExcludedAgent(AgentAugureDesktop))
-	assert.False(t, RemoteSyncExcludedAgent(AgentClaude))
-	assert.False(t, RemoteSyncExcludedAgent(AgentType("unknown-agent")))
-}
-
 func TestAgentByPrefixCowork(t *testing.T) {
 	def, ok := AgentByPrefix("cowork:c0000000-0000-4000-8000-000000000001")
 	require.True(t, ok, "cowork-prefixed ID should resolve")

@@ -3,7 +3,6 @@ package parser
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -31,7 +30,6 @@ func TestTauProviderDefinitionAndLifecycle(t *testing.T) {
 	assert.Equal(t, []string{".tau/sessions"}, def.DefaultDirs)
 	assert.Equal(t, "tau:", def.IDPrefix)
 	assert.True(t, def.FileBased)
-	assert.False(t, def.RemoteSyncExcluded)
 
 	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
@@ -120,46 +118,6 @@ func TestTauProviderDefaultIDsStayRootSpecific(t *testing.T) {
 		foundIDs = append(foundIDs, id)
 	}
 	assert.Len(t, map[string]struct{}{foundIDs[0]: {}, foundIDs[1]: {}}, 2)
-}
-
-func TestTauProviderDefaultIDsUseCanonicalRoot(t *testing.T) {
-	base := t.TempDir()
-	roots := []string{
-		filepath.Join(base, "first-root"),
-		filepath.Join(base, "second-root"),
-	}
-	for _, root := range roots {
-		project := filepath.Join(root, "shared project")
-		require.NoError(t, os.MkdirAll(project, 0o755))
-		writeSourceFile(t, filepath.Join(project, "default.jsonl"), `{"type":"session_info"}`+"\n")
-	}
-	const canonicalRoot = "/remote/.tau/sessions"
-	rewriter := func(path string) string {
-		for _, root := range roots {
-			if path == root || strings.HasPrefix(path, root+string(filepath.Separator)) {
-				return canonicalRoot + strings.TrimPrefix(path, root)
-			}
-		}
-		return path
-	}
-
-	ids := make([]string, 0, len(roots))
-	for _, root := range roots {
-		provider, ok := NewProvider(AgentTau, ProviderConfig{
-			Roots: []string{root}, PathRewriter: rewriter,
-		})
-		require.True(t, ok)
-		sources, err := provider.Discover(t.Context())
-		require.NoError(t, err)
-		require.Len(t, sources, 1)
-		outcome, err := provider.Parse(t.Context(), ParseRequest{
-			Source: sources[0],
-		})
-		require.NoError(t, err)
-		require.Len(t, outcome.Results, 1)
-		ids = append(ids, outcome.Results[0].Result.Session.ID)
-	}
-	assert.Equal(t, ids[0], ids[1])
 }
 
 func TestTauProviderKeepsPiTranscriptWithPi(t *testing.T) {

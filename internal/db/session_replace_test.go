@@ -132,10 +132,6 @@ func TestReplaceSessionKeepingTrashedCopyPreservesLauncherParent(t *testing.T) {
 			link, err = d.GetSessionExternalParent(ctx, copyID)
 			require.NoError(t, err)
 			assert.True(t, link.Applied)
-			exported, err := d.GetArtifactExportSession(ctx, copyID)
-			require.NoError(t, err)
-			assert.Nil(t, exported.ParentSessionID)
-			assert.Equal(t, prior, exported.RelationshipType)
 		})
 	}
 }

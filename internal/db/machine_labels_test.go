@@ -60,7 +60,7 @@ func TestResolveMachineFilter(t *testing.T) {
 		MachineLabelKeyPrefix + "hex-label-owner": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		MachineLabelKeyPrefix + "padded-owner":    "  Padded workstation \t",
 		MachineLabelKeyPrefix + "uppercase-owner": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
-		artifactLocalInstallationStateKey:         "id-a",
+		localInstallationStateKey:                 "id-a",
 	} {
 		require.NoError(t, d.SetSyncState(ctx, key, value))
 	}

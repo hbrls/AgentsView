@@ -135,7 +135,6 @@ func TestAdvanceScopedDataVersion(t *testing.T) {
 		t.Run(strconv.FormatBool(rollback), func(t *testing.T) {
 			d := testDB(t)
 			ctx := t.Context()
-			seedArtifactOrigin(t, d)
 			versions := map[string]int{"codebuff": 130, "freebuff": 130, "claude": 130, "retry": 129}
 			for id, version := range versions {
 				insertSession(t, d, id, "example", func(s *Session) {
@@ -152,7 +151,6 @@ func TestAdvanceScopedDataVersion(t *testing.T) {
 			require.NoError(t, d.ReplaceSkippedFiles(ctx, skips))
 			require.NoError(t, d.ReplaceSourceFailures(ctx, map[string]SourceFailure{"p?agent=freebuff": {MTimeNS: 1}, "p?agent=claude": {MTimeNS: 1}}))
 			require.NoError(t, d.Update(ctx, func(tx *sql.Tx) error { return writeUserVersion(ctx, tx, 130) }))
-			clearArtifactExportQueue(t, d)
 			err = d.Update(ctx, func(tx *sql.Tx) error {
 				if err := advanceDataVersion(ctx, tx, 131); err != nil {
 					return err
@@ -183,7 +181,6 @@ func TestAdvanceScopedDataVersion(t *testing.T) {
 				assert.Equal(t, 131, pending)
 				assert.Equal(t, map[string]int64{"p?agent=claude": 1}, got)
 				assert.Len(t, failures, 1)
-				assert.Equal(t, []string{"claude"}, artifactExportQueueIDs(t, d))
 				candidates, err := d.ListSessionsForMirrorWindow(ctx, "2001-01-01T00:00:00Z", nil, nil)
 				require.NoError(t, err)
 				assert.Empty(t, candidates, "parser bookkeeping leaves unaffected mirror candidates unchanged")

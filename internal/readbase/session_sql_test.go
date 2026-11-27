@@ -44,25 +44,3 @@ func TestSecretFindingsSQL(t *testing.T) {
 	}
 }
 
-func TestSidebarSQL(t *testing.T) {
-	for _, tt := range []struct {
-		name     string
-		dialect  db.QueryDialect
-		position string
-		count    string
-	}{
-		{"duckdb", db.DuckDBQueryDialect(), "position('<teammate-message' in COALESCE(first_message, ''))", "COUNT(*)"},
-		{"clickhouse", db.ClickHouseQueryDialect(), "position(COALESCE(first_message, ''), '<teammate-message')", "toInt64(COUNT(*))"},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			filter := db.SessionFilter{Project: "project", IncludeChildren: true, IncludeOrphans: true}
-			query, args := (SessionQueries{}).SidebarSQL(filter, tt.dialect)
-			where, wantArgs := db.BuildSessionFilterSQL(filter, tt.dialect)
-			assert.Equal(t, wantArgs, args)
-			assert.Contains(t, query, "FROM sessions WHERE "+where)
-			assert.Contains(t, query, "is_automated, "+tt.position+" > 0")
-			assert.Contains(t, query, "ORDER BY COALESCE(ended_at, started_at, created_at) DESC, id DESC")
-			assert.Equal(t, tt.count, tt.dialect.SignedAggregate("COUNT(*)"))
-		})
-	}
-}

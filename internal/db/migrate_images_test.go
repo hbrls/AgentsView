@@ -94,7 +94,6 @@ func TestToolImageMigrationContract(t *testing.T) {
 // Boundary: 0 rows carrying image_ref after failure.
 func TestMigrateLeavesBlockInlineWhenPutFails(t *testing.T) {
 	d := testDB(t)
-	seedArtifactOrigin(t, d)
 	insertSession(t, d, "fail-put", "project")
 	insertMessages(t, d, testImageMessage("fail-put"))
 
@@ -351,7 +350,6 @@ func TestMigratedReferenceMatchesStoredFile(t *testing.T) {
 // Boundary: 1 file after 2 attempts.
 func TestMigrateWritesBeforeCommit(t *testing.T) {
 	d := testDB(t)
-	seedArtifactOrigin(t, d)
 	assetsDir := t.TempDir()
 
 	insertSession(t, d, "write-before-commit", "project")
@@ -367,7 +365,6 @@ func TestMigrateWritesBeforeCommit(t *testing.T) {
 		"2026-01-01T00:00:00Z", 0,
 	)
 	require.NoError(t, err)
-	clearArtifactExportQueue(t, d)
 
 	// Trigger that fires after bumpTranscriptRevisionTx updates transcript_revision,
 	// aborting the transaction. At that point content UPDATEs have run but the
@@ -603,7 +600,6 @@ func TestMigrateSummaryPutFailurePreservesContent(t *testing.T) {
 // Boundary: 0 publications.
 func TestMigrateNoOpPreservesRevisionAndQueue(t *testing.T) {
 	d := testDB(t)
-	seedArtifactOrigin(t, d)
 	assetsDir := t.TempDir()
 	insertSession(t, d, "noop-session", "project")
 	insertMessages(t, d, Message{
@@ -633,7 +629,6 @@ func TestMigrateNoOpPreservesRevisionAndQueue(t *testing.T) {
 	)
 	require.NoError(t, err)
 	// Clear after seeding: the sessions UPDATE may trigger an artifact-export enqueue.
-	clearArtifactExportQueue(t, d)
 
 	put := realPut(assetsDir)
 	report, err := d.MigrateToolImages(t.Context(), StripImagesFilter{}, put)
@@ -648,14 +643,6 @@ func TestMigrateNoOpPreservesRevisionAndQueue(t *testing.T) {
 		"SELECT transcript_revision FROM sessions WHERE id = ?", "noop-session",
 	).Scan(&afterRevision))
 	assert.Equal(t, beforeRevision, afterRevision)
-
-	// No new publication queued: pending stays 0 (clearArtifactExportQueue zeros
-	// rows but does not delete them).
-	var pending int
-	require.NoError(t, d.getReader().QueryRow(t.Context(),
-		"SELECT pending FROM artifact_export_queue WHERE session_id = ?", "noop-session",
-	).Scan(&pending))
-	assert.Zero(t, pending)
 
 	// Signal invalidation and incremental-marker reset must not fire.
 	var qualitySignalVersion, lastWriteIncremental int
@@ -970,10 +957,8 @@ func TestMigrateDeduplicatedSummaryKeepsCollapse(t *testing.T) {
 	d := testDB(t)
 	assetsDir := t.TempDir()
 	put := realPut(assetsDir)
-	seedArtifactOrigin(t, d)
 	insertSession(t, d, "dedup-collapse", "project")
 	insertMessages(t, d, testTimedImageMessage("dedup-collapse"))
-	clearArtifactExportQueue(t, d)
 
 	// Verify the dedup invariant: result_content is empty, result_content_length
 	// is positive (set to the event length at insert time).
@@ -1018,7 +1003,6 @@ func TestMigrateDeduplicatedSummaryKeepsCollapse(t *testing.T) {
 // rows (with no matching tool_call) are migrated.
 func TestMigrateReachesOrphanEventRows(t *testing.T) {
 	d := testDB(t)
-	seedArtifactOrigin(t, d)
 	assetsDir := t.TempDir()
 	insertSession(t, d, "orphan-event", "project")
 
@@ -1034,7 +1018,6 @@ func TestMigrateReachesOrphanEventRows(t *testing.T) {
 		"2026-01-01T00:00:00Z", 0,
 	)
 	require.NoError(t, err)
-	clearArtifactExportQueue(t, d)
 
 	put := realPut(assetsDir)
 	report, err := d.MigrateToolImages(t.Context(), StripImagesFilter{}, put)

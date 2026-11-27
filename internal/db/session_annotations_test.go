@@ -546,12 +546,6 @@ func TestRebuildLauncherRelationshipProvenance(t *testing.T) {
 			var parserRelationship string
 			require.NoError(t, destination.getReader().QueryRowContext(ctx, "SELECT parser_relationship_type FROM sessions WHERE id = 'worker'").Scan(&parserRelationship))
 			assert.Equal(t, want, parserRelationship)
-			if !tc.trashed {
-				exported, err := destination.GetArtifactExportSession(ctx, "worker")
-				require.NoError(t, err)
-				assert.Nil(t, exported.ParentSessionID)
-				assert.Equal(t, want, exported.RelationshipType)
-			}
 			_, err = destination.ClearSessionExternalParent(ctx, "worker")
 			require.NoError(t, err)
 			var relationship string
@@ -947,10 +941,6 @@ func TestAppliedLauncherParentRestoresParserClassification(t *testing.T) {
 				} else if !classification.legacy && action != "pending only" {
 					insertSession(t, d, "worker", "proj", parserSession)
 				}
-				exported, err := d.GetArtifactExportSession(ctx, "worker")
-				require.NoError(t, err)
-				assert.Nil(t, exported.ParentSessionID)
-				assert.Equal(t, classification.want, exported.RelationshipType)
 				switch action {
 				case "clear":
 					_, err = d.ClearSessionExternalParent(ctx, "worker")

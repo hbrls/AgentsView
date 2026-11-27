@@ -1,7 +1,6 @@
 package db
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -98,30 +97,6 @@ func TestSelfParentNeverPersists(t *testing.T) {
 				}})
 				require.NoError(t, err)
 				return "batch-self"
-			},
-		},
-		{
-			name: "ApplyArtifactImportedSession",
-			write: func(t *testing.T, d *DB) string {
-				t.Helper()
-
-				gid := origin + "~import-self"
-				result, err := d.ApplyArtifactImportedSession(
-					t.Context(),
-					ArtifactImportedSession{
-						Origin: origin, GID: gid,
-						ManifestHash:      strings.Repeat("b", 64),
-						ImportedSessionID: gid,
-					},
-					SessionBatchWrite{
-						Session:         selfParented(gid),
-						Messages:        []Message{spawnEdgeTo(gid, gid, "self")},
-						ReplaceMessages: true,
-					},
-				)
-				require.NoError(t, err)
-				require.True(t, result.Written)
-				return gid
 			},
 		},
 	} {

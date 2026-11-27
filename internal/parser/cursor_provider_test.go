@@ -427,17 +427,6 @@ func TestCursorProviderFingerprintSkipsOversizedTranscriptHash(t *testing.T) {
 	assert.Contains(t, err.Error(), "file too large")
 }
 
-func TestCursorPathFromSourceMaterializedFile(t *testing.T) {
-	s := newCursorSourceSet([]string{t.TempDir()})
-	path := filepath.Join(t.TempDir(), "abc.jsonl")
-	got, ok := s.pathFromSource(SourceRef{
-		Provider: AgentCursor,
-		Opaque:   MaterializedFileSource{Path: path},
-	})
-	require.True(t, ok)
-	assert.Equal(t, path, got)
-}
-
 func cursorProviderWriteTranscript(
 	t *testing.T,
 	dir string,
@@ -534,66 +523,6 @@ func TestCursorProviderResolutionIsOperationLocalAndFresh(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, changed, 1)
 	assert.Equal(t, SourceCwdAmbiguous, changed[0].CwdResolution.State)
-}
-
-func TestCursorProviderPathRewriterMakesResolutionRemote(t *testing.T) {
-	root := t.TempDir()
-	projectDir := "Users-helix-Code-app"
-	path := cursorProviderWriteJSONLTranscript(
-		t, filepath.Join(root, projectDir, "agent-transcripts"),
-		"11111111-2222-4333-8444-555555555555.jsonl", "remote",
-	)
-	workspaceRoot := t.TempDir()
-	require.NoError(t, os.MkdirAll(
-		filepath.Join(workspaceRoot, "Users", "helix", "Code", "app"), 0o755,
-	))
-	originalProbe := probeGitRootForCwd
-	t.Cleanup(func() { probeGitRootForCwd = originalProbe })
-	originalReadDir := cursorReadDir
-	t.Cleanup(func() { cursorReadDir = originalReadDir })
-	originalStat := osStat
-	t.Cleanup(func() { osStat = originalStat })
-	var probeCalls int
-	var readDirCalls int
-	var statCalls int
-	probeGitRootForCwd = func(path string) bool {
-		probeCalls++
-		return true
-	}
-	cursorReadDir = func(path string) ([]os.DirEntry, error) {
-		readDirCalls++
-		return os.ReadDir(path)
-	}
-	osStat = func(path string) (os.FileInfo, error) {
-		statCalls++
-		return os.Stat(path)
-	}
-
-	provider, ok := NewProvider(AgentCursor, ProviderConfig{
-		Roots:        []string{root},
-		PathRewriter: func(string) string { return "remote:" + path },
-		MetadataDirs: map[string][]string{root: {filepath.Join(root, "chats")}},
-	})
-	require.True(t, ok)
-	sources, err := provider.Discover(t.Context())
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
-	assert.Equal(t, SourceCwdRemote, sources[0].CwdResolution.State)
-	assert.Zero(t, probeCalls)
-	assert.Zero(t, readDirCalls)
-	assert.Zero(t, statCalls)
-	watchPlan, err := provider.WatchPlan(t.Context())
-	require.NoError(t, err)
-	for _, watchRoot := range watchPlan.Roots {
-		assert.False(t, samePath(watchRoot.Path, filepath.Join(root, "chats")))
-	}
-	changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
-		Path:      filepath.Join(root, "chats", "store.db"),
-		WatchRoot: filepath.Join(root, "chats"),
-		EventKind: "write",
-	})
-	require.NoError(t, err)
-	assert.Empty(t, changed)
 }
 
 func TestCursorProviderSourceMachineMakesResolutionRemote(t *testing.T) {

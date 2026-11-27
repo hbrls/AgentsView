@@ -256,9 +256,6 @@ func TestOpenReadOnlyWriteMethodsReturnErrReadOnly(t *testing.T) {
 	requireReadOnlyOp(t, "ReplaceSkippedFiles", func() error {
 		return readonly.ReplaceSkippedFiles(t.Context(), map[string]int64{"x": 1})
 	})
-	requireReadOnlyOp(t, "ClearRemoteSkippedFiles", func() error {
-		return readonly.ClearRemoteSkippedFiles(t.Context(), "remote-host")
-	})
 	requireReadOnlyOp(t, "UpdateSessionIncremental", func() error {
 		return readonly.UpdateSessionIncremental(t.Context(), "s", IncrementalSessionUpdate{})
 	})

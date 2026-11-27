@@ -838,71 +838,6 @@ func TestMigration_ResultContentColumn(t *testing.T) {
 	assert.Empty(t, tc.ResultContent, "ResultContent")
 }
 
-func TestUpgradeExportSchemaInPlaceOnlyAddsExportIdentitySchema(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "test.db")
-	d := testDBAtPath(t, path, "schema-only upgrade db")
-	insertSession(t, d, "schema-only", "project")
-	requireNoError(t, d.Close(), "close schema-only upgrade db")
-
-	conn, err := sql.Open("sqlite3", path)
-	requireNoError(t, err, "open schema-only upgrade fixture")
-	_, err = conn.ExecContext(t.Context(), `
-		UPDATE sessions
-		SET first_message = 'ordinary interactive request',
-			user_message_count = 1,
-			is_automated = 1
-		WHERE id = 'schema-only';
-		DELETE FROM archive_metadata;
-		ALTER TABLE project_identity_observations DROP COLUMN checkout_state;
-		DROP TABLE remote_skipped_files;
-		DROP TABLE session_project_identity_snapshots;
-	`)
-	requireNoError(t, err, "prepare schema-only upgrade fixture")
-	requireNoError(t, conn.Close(), "close schema-only upgrade fixture")
-
-	requireNoError(t, UpgradeExportSchemaInPlace(t.Context(), path,
-		&SchemaUpgradeRequiredError{
-			Table:  "session_project_identity_snapshots",
-			Column: "session_id",
-		}), "upgrade export schema in place")
-
-	conn, err = sql.Open("sqlite3", path)
-	requireNoError(t, err, "reopen schema-only upgrade fixture")
-	defer conn.Close()
-	var isAutomated int
-	requireNoError(t, conn.QueryRowContext(t.Context(),
-		`SELECT is_automated FROM sessions WHERE id = 'schema-only'`,
-	).Scan(&isAutomated), "read preserved session classification")
-	assert.Equal(t, 1, isAutomated,
-		"schema-only upgrade must not reclassify existing sessions")
-	var tableCount int
-	requireNoError(t, conn.QueryRowContext(t.Context(), `
-		SELECT count(*) FROM sqlite_master
-		WHERE type = 'table' AND name = 'session_project_identity_snapshots'
-	`).Scan(&tableCount), "read upgraded schema")
-	assert.Equal(t, 1, tableCount)
-	requireNoError(t, conn.QueryRowContext(t.Context(), `
-		SELECT count(*) FROM sqlite_master
-		WHERE type = 'table' AND name = 'remote_skipped_files'
-	`).Scan(&tableCount), "read unrelated schema")
-	assert.Zero(t, tableCount,
-		"export upgrade must not initialize unrelated schema")
-	var columnCount int
-	requireNoError(t, conn.QueryRowContext(t.Context(), `
-		SELECT count(*) FROM pragma_table_info('project_identity_observations')
-		WHERE name = 'checkout_state'
-	`).Scan(&columnCount), "read upgraded observation schema")
-	assert.Equal(t, 1, columnCount)
-	var metadataCount int
-	requireNoError(t, conn.QueryRowContext(t.Context(), `
-		SELECT count(*) FROM archive_metadata
-		WHERE key IN ('database_id', 'archive_id', 'archive_salt')
-		  AND trim(value) != ''
-	`).Scan(&metadataCount), "read initialized export metadata")
-	assert.Equal(t, 3, metadataCount)
-}
-
 func TestUpgradeExportSchemaInPlaceRejectsUnrelatedSchemaGap(t *testing.T) {
 	d := testDB(t)
 	err := UpgradeExportSchemaInPlace(t.Context(), d.Path(), &SchemaUpgradeRequiredError{
@@ -6851,9 +6786,6 @@ func TestCopySyncStateFrom_OnlyCopiesDurableKeys(t *testing.T) {
 	require.NoError(t, err, "GetSyncState artifact_origin_id")
 	assert.Equal(t, "laptop-a1b2c3", gotOrigin,
 		"artifact_% sync-state keys must survive the copy")
-
-	assert.Contains(t, artifactExportQueueIDs(t, dstDB), "queued-session",
-		"artifact export queue rows must survive the copy")
 
 	var queuedRepairs int
 	require.NoError(t, dstDB.Reader().QueryRow(t.Context(), `

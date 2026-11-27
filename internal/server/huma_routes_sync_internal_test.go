@@ -6,12 +6,8 @@ import (
 	"database/sql"
 	"encoding/json/v2"
 	"errors"
-	"fmt"
-	"log"
-	"net"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -45,21 +41,9 @@ type syncRouteFixture struct {
 	handler   http.Handler
 }
 
-type offlineRemoteTransport struct{ err error }
-
-func (tr offlineRemoteTransport) RoundTrip(
-	*http.Request,
-) (*http.Response, error) {
-	if tr.err != nil {
-		return nil, tr.err
-	}
-	return nil, syscall.ETIMEDOUT
-}
-
 type syncRouteFixtureConfig struct {
 	stale          bool
 	archiveContent config.ArchiveContent
-	remoteHosts    []config.RemoteHost
 	disabledAgents []parser.AgentType
 	extraAgentDirs map[parser.AgentType][]string
 	broadcaster    *Broadcaster
@@ -70,16 +54,6 @@ type syncRouteFixtureConfig struct {
 }
 
 type syncRouteFixtureOption func(*syncRouteFixtureConfig)
-
-// Serial: callers replace the process-wide log output.
-func captureServerLogOutput(t *testing.T) *bytes.Buffer {
-	t.Helper()
-	var buf bytes.Buffer
-	previous := log.Writer()
-	log.SetOutput(&buf)
-	t.Cleanup(func() { log.SetOutput(previous) })
-	return &buf
-}
 
 func withStaleDB() syncRouteFixtureOption {
 	return func(c *syncRouteFixtureConfig) { c.stale = true }
@@ -103,10 +77,6 @@ func withLocalResyncRunner(r LocalResyncRunner) syncRouteFixtureOption {
 	return func(c *syncRouteFixtureConfig) { c.resyncRunner = r }
 }
 
-func withRemoteHosts(hosts ...config.RemoteHost) syncRouteFixtureOption {
-	return func(c *syncRouteFixtureConfig) { c.remoteHosts = hosts }
-}
-
 func withDisabledAgents(
 	disabled []parser.AgentType,
 	dirs map[parser.AgentType][]string,
@@ -115,10 +85,6 @@ func withDisabledAgents(
 		c.disabledAgents = append([]parser.AgentType(nil), disabled...)
 		c.extraAgentDirs = dirs
 	}
-}
-
-func withBroadcasterForSyncRoutes(b *Broadcaster) syncRouteFixtureOption {
-	return func(c *syncRouteFixtureConfig) { c.broadcaster = b }
 }
 
 func newSyncRouteFixture(
@@ -160,7 +126,6 @@ func newSyncRouteFixture(
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {claudeDir},
 		},
-		RemoteHosts:    cfg.remoteHosts,
 		DisabledAgents: cfg.disabledAgents,
 	}
 	for agent, dirs := range cfg.extraAgentDirs {
@@ -220,10 +185,6 @@ func markDBStale(t *testing.T, dbPath string) {
 
 type syncRouteRequestOption func(*http.Request)
 
-func withRemoteAddr(addr string) syncRouteRequestOption {
-	return func(req *http.Request) { req.RemoteAddr = addr }
-}
-
 func withAccept(value string) syncRouteRequestOption {
 	return func(req *http.Request) { req.Header.Set("Accept", value) }
 }
@@ -268,17 +229,6 @@ func postSessionSync(
 	t.Helper()
 	return serveJSON(t, h, http.MethodPost, "/api/v1/sessions/sync",
 		service.SyncInput{Path: sessionPath})
-}
-
-func postRemoteSync(
-	t *testing.T,
-	h http.Handler,
-	hosts []config.RemoteHost,
-	opts ...syncRouteRequestOption,
-) *httptest.ResponseRecorder {
-	t.Helper()
-	return serveJSON(t, h, http.MethodPost, "/api/v1/sync/remotes",
-		remoteSyncRequest{Hosts: hosts}, opts...)
 }
 
 func decodeRecorder[T any](

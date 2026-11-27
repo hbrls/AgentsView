@@ -418,26 +418,6 @@ func TestTraeXProviderIgnoresCodexSidecars(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Empty(t, sources, "index events must not fan out for a fork")
-
-	oldList := listS3Objects
-	t.Cleanup(func() { listS3Objects = oldList })
-	listS3Objects = func(string) ([]S3Object, error) {
-		return []S3Object{{
-			URI: "s3://bucket/devbox/raw/codex/2026/08/01/" +
-				"rollout-2026-08-01T18-07-03-" + uuid + ".jsonl",
-			Size:         11,
-			LastModified: time.Unix(100, 0),
-			Fingerprint:  "s3-meta:rollout",
-		}}, nil
-	}
-	s3Provider, ok := NewProvider(AgentTraeX, ProviderConfig{
-		Roots: []string{"s3://bucket/devbox/raw/codex"},
-	})
-	require.True(t, ok)
-	s3Sources, err := s3Provider.Discover(t.Context())
-	require.NoError(t, err)
-	assert.Empty(t, s3Sources,
-		"TraeX has no S3 archive convention and must not import one as Codex")
 }
 
 func TestTraeXProviderHistoryMutationUsage(t *testing.T) {

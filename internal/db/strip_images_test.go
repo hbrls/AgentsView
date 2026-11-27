@@ -226,7 +226,6 @@ func TestStripToolImagesPublication(t *testing.T) {
 
 func TestStripToolImagesProjectsOrphanedStoredEvents(t *testing.T) {
 	d := testDB(t)
-	seedArtifactOrigin(t, d)
 	insertSession(t, d, "event-only", "project")
 	content := `[{"type":"text","text":"before"},{"type":"input_image","image_url":"data:image/png;base64,AAEC"},{"type":"text","text":"after"}]`
 	_, err := d.getWriter().Exec(t.Context(), `
@@ -240,7 +239,6 @@ func TestStripToolImagesProjectsOrphanedStoredEvents(t *testing.T) {
 		"2026-01-01T00:00:00Z", 4,
 	)
 	require.NoError(t, err)
-	clearArtifactExportQueue(t, d)
 	_, err = d.getWriter().Exec(t.Context(), `
 		UPDATE sessions SET
 			last_write_incremental = 1,
@@ -310,11 +308,6 @@ func TestStripToolImagesProjectsOrphanedStoredEvents(t *testing.T) {
 	assert.Zero(t, isAutomated)
 	assert.Zero(t, qualityVersion)
 	assert.Zero(t, secretLeakCount)
-	var pending int
-	require.NoError(t, d.getReader().QueryRow(t.Context(),
-		"SELECT pending FROM artifact_export_queue WHERE session_id = ?", "event-only",
-	).Scan(&pending))
-	assert.Equal(t, 1, pending)
 }
 
 func TestStripToolImagesRollsBackWhenEventUpdateFails(t *testing.T) {
@@ -555,14 +548,12 @@ func TestStripToolResultImagesGolden(t *testing.T) {
 // and its revision once, while a second strip is a no-op.
 func TestStripPublicationSequence(t *testing.T) {
 	d := testDB(t)
-	seedArtifactOrigin(t, d)
 	insertSession(t, d, "pub-unchanged", "project")
 	insertMessages(t, d, testImageMessage("pub-unchanged"))
 	tx, err := d.getWriter().Begin(t.Context())
 	require.NoError(t, err)
 	require.NoError(t, ensureToolCallAgentStateTx(t.Context(), tx, "pub-unchanged", ToolCallPosition{}))
 	require.NoError(t, tx.Commit())
-	clearArtifactExportQueue(t, d)
 
 	var before string
 	require.NoError(t, d.getReader().QueryRow(t.Context(),

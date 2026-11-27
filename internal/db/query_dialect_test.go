@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func encodeBranchFilterTokensForTest(branches ...BranchInfo) string {
@@ -316,9 +315,6 @@ func TestBuildSessionFilterSQLPRHost(t *testing.T) {
 }
 
 func TestQueryDialectPosition(t *testing.T) {
-	assert.Equal(t, "position('needle' in content)", PostgresQueryDialect().Position("content", "'needle'"))
-	assert.Equal(t, "position('needle' in content)", DuckDBQueryDialect().Position("content", "'needle'"))
-	assert.Equal(t, "position(content, 'needle')", ClickHouseQueryDialect().Position("content", "'needle'"))
 	assert.PanicsWithValue(t, "SQL position is unsupported for dialect missing", func() {
 		QueryDialect{name: "missing"}.Position("content", "'needle'")
 	})

@@ -394,37 +394,3 @@ func TestAiderProviderFindSourceByRawID(t *testing.T) {
 	assert.Equal(t, outcome.Results[1].Result.Session.ID,
 		single.Results[0].Result.Session.ID)
 }
-
-// TestAiderProviderRemoteIdentityStable verifies the PathRewriter-seeded
-// identity keeps per-run session IDs stable when the same history file is read
-// from different (temp) locations, mirroring remote sync.
-func TestAiderProviderRemoteIdentityStable(t *testing.T) {
-	rootA := t.TempDir()
-	rootB := t.TempDir()
-	writeAiderProviderHistory(t, filepath.Join(rootA, "myrepo"))
-	writeAiderProviderHistory(t, filepath.Join(rootB, "myrepo"))
-
-	canonical := "host:/home/wes/myrepo/" + AiderHistoryFileName()
-	rewriter := func(string) string { return canonical }
-
-	idsFor := func(root string) []string {
-		provider, ok := NewProvider(AgentAider, ProviderConfig{
-			Roots:        []string{root},
-			PathRewriter: rewriter,
-		})
-		require.True(t, ok)
-		discovered, err := provider.Discover(t.Context())
-		require.NoError(t, err)
-		require.Len(t, discovered, 1)
-		outcome, err := provider.Parse(t.Context(), ParseRequest{Source: discovered[0]})
-		require.NoError(t, err)
-		ids := make([]string, 0, len(outcome.Results))
-		for _, r := range outcome.Results {
-			ids = append(ids, r.Result.Session.ID)
-		}
-		return ids
-	}
-
-	assert.Equal(t, idsFor(rootA), idsFor(rootB),
-		"the canonical identity must keep run IDs stable across extraction dirs")
-}
