@@ -23,6 +23,16 @@ LDFLAGS = -X main.version=$(VERSION) \
 
 LDFLAGS_RELEASE = $(LDFLAGS) -s -w
 DESKTOP_DIST_DIR := dist/desktop
+SIDECAR_DIR := desktop/src-tauri/binaries
+VERSION_JSON := $(SIDECAR_DIR)/version.json
+# Tauri layered-config override, passed to `tauri build --config`.
+# Named after the ecosystem pattern tauri.<platform>.conf.json so it
+# reads as a macOS override but is NOT auto-loaded (only the exact
+# tauri.macos.conf.json name would be).
+TAURI_VERSION_CONF := desktop/src-tauri/tauri.macos.version.conf.json
+# Semver form of VERSION for the Tauri app shell: strip v / -dirty and
+# turn git-describe distance 0.10.0-3-gabc into 0.10.0-dev.3.
+TAURI_VERSION := $(shell printf '%s' '$(VERSION)' | sed -E -e 's/^v//' -e 's/-dirty$$//' -e 's/-([0-9]+)-g[0-9a-f]+$$/-dev.\1/')
 GOLANGCI_LINT_VERSION ?= v2.14.0
 # Isolate each checkout from stale sibling-worktree fixes and issue positions.
 GOLANGCI_LINT_CACHE ?= $(CURDIR)/.golangci-cache
@@ -91,17 +101,57 @@ sqlite-vec-header:
 # Restore the generated LiteLLM fallback snapshot from its artifact branch.
 # Pinned ref, SHA256, and branch are compiled into the snapshot tool.
 pricing-snapshot: sqlite-vec-header
-	$(DOWNLOAD_RETRY) go run ./internal/pricing/cmd/litellm-snapshot -restore
+# 	$(DOWNLOAD_RETRY) go run ./internal/pricing/cmd/litellm-snapshot -restore
+	@echo "pricing snapshot: must be prepared in advance (see build-mac.sh)"
 
 # Build the binary (debug, with embedded pricing snapshot and frontend)
 build: pricing-snapshot frontend
 	CGO_ENABLED=1 go build -tags fts5 -ldflags="$(LDFLAGS)" -o agentsview ./cmd/agentsview
 	@chmod +x agentsview
 
-# Build with optimizations (release)
-build-release: pricing-snapshot frontend
-	CGO_ENABLED=1 go build -tags fts5 -ldflags="$(LDFLAGS_RELEASE)" -trimpath -o agentsview ./cmd/agentsview
-	@chmod +x agentsview
+# Build with optimizations (release). Native builds keep ./agentsview
+# usable for dev. Resolve the Tauri target here so compilation, sidecar
+# naming, and version metadata agree (see build-mac.sh).
+build-release: pricing-snapshot frontend ensure-embed-dir
+	@set -eu; \
+	target_triple="$${TAURI_ENV_TARGET_TRIPLE:-$${CARGO_BUILD_TARGET:-}}"; \
+	if [ -z "$$target_triple" ]; then \
+		if ! command -v rustc >/dev/null 2>&1; then \
+			echo "error: rustc is required to determine the host target triple" >&2; \
+			exit 1; \
+		fi; \
+		rust_info="$$(rustc -vV)"; \
+		target_triple="$$(printf '%s\n' "$$rust_info" | awk '/^host: /{print $$2}')"; \
+	fi; \
+	if [ -z "$$target_triple" ]; then \
+		echo "error: could not determine host target triple" >&2; \
+		exit 1; \
+	fi; \
+	case "$$target_triple" in \
+		aarch64-apple-darwin) goos=darwin; goarch=arm64 ;; \
+		x86_64-apple-darwin) goos=darwin; goarch=amd64 ;; \
+		x86_64-pc-windows-msvc|x86_64-pc-windows-gnu) goos=windows; goarch=amd64 ;; \
+		aarch64-pc-windows-msvc) goos=windows; goarch=arm64 ;; \
+		x86_64-unknown-linux-gnu) goos=linux; goarch=amd64 ;; \
+		aarch64-unknown-linux-gnu) goos=linux; goarch=arm64 ;; \
+		*) echo "error: unsupported target triple for Go sidecar: $$target_triple" >&2; exit 1 ;; \
+	esac; \
+	ext=""; \
+	if [ "$$goos" = windows ]; then ext=".exe"; fi; \
+	echo "Building agentsview backend for sidecar ($$target_triple -> $$goos/$$goarch)..."; \
+	CGO_ENABLED=1 GOOS="$$goos" GOARCH="$$goarch" go build -tags fts5 \
+		-ldflags="$(LDFLAGS_RELEASE)" -trimpath -o agentsview ./cmd/agentsview; \
+	chmod +x agentsview; \
+	mkdir -p "$(SIDECAR_DIR)"; \
+	cp agentsview "$(SIDECAR_DIR)/agentsview-$$target_triple$$ext"; \
+	printf '{"version":"%s","commit":"%s","buildDate":"%s","target":"%s"}' \
+		'$(VERSION)' '$(COMMIT)' '$(BUILD_DATE)' "$$target_triple" > "$(VERSION_JSON)"; \
+	if printf '%s' '$(TAURI_VERSION)' | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$$'; then \
+		v='$(TAURI_VERSION)'; \
+	else \
+		v='0.0.0-dev'; \
+	fi; \
+	printf '{"version":"%s"}' "$$v" > "$(TAURI_VERSION_CONF)"
 
 # Homebrew build profile: the release build with cgo and
 # DISTRIBUTION=homebrew, written to $(BINDIR)/agentsview.
@@ -170,12 +220,13 @@ install-cjk-fts: install simple-fts
 
 # Build frontend SPA and copy into embed directory
 frontend:
-	cd frontend && $(DOWNLOAD_RETRY) npm ci && npm run build
-	rm -rf internal/web/dist
-	cp -r frontend/dist internal/web/dist
-	printf '%s\n' \
-		'keep embed dir for generated frontend assets' \
-		> internal/web/dist/.keep
+	@echo "frontend: must be built in advance (see build-mac.sh)"
+# 	cd frontend && $(DOWNLOAD_RETRY) npm ci && npm run build
+# 	rm -rf internal/web/dist
+# 	cp -r frontend/dist internal/web/dist
+# 	printf '%s\n' \
+# 		'keep embed dir for generated frontend assets' \
+# 		> internal/web/dist/.keep
 
 # Run Vite+ dev server (use alongside `make dev`)
 frontend-dev:
@@ -248,7 +299,8 @@ check-air:
 air-install:
 	go install github.com/air-verse/air@latest
 
-# Run Go server in dev mode with live reload (use with frontend-dev).
+# Run Go server in dev mode with live reload (frontend dev server runs
+# separately via pnpm --filter agentsview-frontend dev).
 # Edits to .go files trigger a rebuild + restart via air.
 dev: pricing-snapshot ensure-embed-dir check-air
 	"$(AIR_BIN)" -c .air.toml -- $(ARGS)
@@ -262,11 +314,8 @@ desktop-build:
 	cd desktop && npm ci && npm run tauri:build
 
 # Build only the macOS .app bundle (skip DMG packaging).
-# Skips updater artifact signing when TAURI_SIGNING_PRIVATE_KEY
-# is not set so local builds succeed without release keys.
 desktop-macos-app:
-	cd desktop && npm ci && npm run tauri:build:macos-app \
-		$(if $(TAURI_SIGNING_PRIVATE_KEY),,-- --config '{"bundle":{"createUpdaterArtifacts":false}}')
+	cd desktop && npm ci && npm run tauri:build:macos-app
 	mkdir -p $(DESKTOP_DIST_DIR)/macos
 	rm -rf $(DESKTOP_DIST_DIR)/macos/AgentsView.app
 	cp -R desktop/src-tauri/target/release/bundle/macos/AgentsView.app \
@@ -325,8 +374,7 @@ desktop-windows-installer:
 # Build Linux AppImage bundle
 # Run on a Linux host.
 desktop-linux-appimage:
-	cd desktop && npm ci && npm run tauri:build:linux \
-		$(if $(TAURI_SIGNING_PRIVATE_KEY),,-- --config '{"bundle":{"createUpdaterArtifacts":false}}')
+	cd desktop && npm ci && npm run tauri:build:linux
 	cd desktop && bash scripts/repair-appimage-diricon.sh \
 		src-tauri/target/release/bundle/appimage/*.AppImage
 	mkdir -p $(DESKTOP_DIST_DIR)/linux
@@ -387,16 +435,6 @@ gotestsum = go tool gotestsum --format pkgname-and-test-fails --format-icons tex
 test-evalingest: pricing-snapshot ensure-embed-dir
 	CGO_ENABLED=1 $(call gotestsum,evalingest,./internal/server) \
 		-tags "fts5,evalingest" -count=1
-
-# Compare db.Store read-query performance across SQLite, DuckDB, and PostgreSQL.
-# Requires Docker because the PostgreSQL backend is started with testcontainers.
-BENCH_BACKENDS_FLAGS ?= -bench . -run '^$$' -benchmem
-BENCH_BACKENDS_SESSIONS ?= 1000
-BENCH_BACKENDS_MESSAGES_PER_SESSION ?= 64
-bench-backends: pricing-snapshot ensure-embed-dir
-	AGENTSVIEW_BENCH_SESSIONS=$(BENCH_BACKENDS_SESSIONS) \
-		AGENTSVIEW_BENCH_MESSAGES_PER_SESSION=$(BENCH_BACKENDS_MESSAGES_PER_SESSION) \
-		CGO_ENABLED=1 go test -tags "fts5,benchdb" ./internal/backendbench $(BENCH_BACKENDS_FLAGS)
 
 # Local hot-path benchmark comparison. Runs every benchmark in these packages
 # (sync engine warm/cold/append, message write paths, usage
@@ -529,14 +567,6 @@ e2e:
 	cd frontend && \
 		PROJECT_MAPPING_WORKSPACE_E2E_ENABLED="$(PROJECT_MAPPING_WORKSPACE_E2E_ENABLED)" \
 		npx playwright test
-
-# Run focused Playwright smoke tests against duckdb serve.
-e2e-duckdb:
-	cd frontend && AGENTSVIEW_E2E_BACKEND=duckdb \
-		PROJECT_MAPPING_WORKSPACE_E2E_ENABLED="$(PROJECT_MAPPING_WORKSPACE_E2E_ENABLED)" \
-		npx playwright test \
-		e2e/duckdb-backend.spec.ts e2e/data-mode.spec.ts \
-		e2e/session-list.spec.ts --project=chromium
 
 # Run the opt-in native-client conversation-memory release gate. This uses the
 # caller's authenticated Claude Code and Codex installations and writes traces
@@ -765,11 +795,10 @@ help:
 	@echo "  install-cjk-fts - Install agentsview with the optional CJK FTS sidecar"
 	@echo "  simple-fts     - Build the pinned simple/cppjieba SQLite extension"
 	@echo ""
-	@echo "  dev            - Run Go server with live reload via air (use with frontend-dev)"
+	@echo "  dev            - Run Go server with live reload via air (frontend dev server: pnpm --filter agentsview-frontend dev)"
 	@echo "  dev-snapshot   - Run agentsview against a fresh snapshot of prod sessions.db"
 	@echo "  air-install    - Install air for backend live reload"
-	@echo "  frontend       - Build frontend SPA"
-	@echo "  frontend-dev   - Run Vite+ dev server"
+	@echo "  frontend       - Reminder: frontend must be built in advance (see build-mac.sh)"
 	@echo "  desktop-dev    - Run Tauri desktop wrapper in dev mode"
 	@echo "  desktop-build  - Build Tauri desktop app bundles"
 	@echo "  desktop-macos-app - Build macOS .app bundle only"
@@ -780,18 +809,8 @@ help:
 	@echo ""
 	@echo "  test           - Run all tests"
 	@echo "  test-short     - Run fast tests only"
-	@echo "  bench-backends - Benchmark SQLite, DuckDB, and PostgreSQL stores"
-	@echo "  bench-pg-usage - Run opt-in PostgreSQL usage benchmarks against PG16"
 	@echo "  bench-gate     - Run hot-path benchmarks for local comparison"
-	@echo "  test-postgres  - Run PostgreSQL integration tests"
-	@echo "  test-clickhouse - Run ClickHouse integration tests"
-	@echo "  test-s3        - Run S3 discovery integration tests (Docker)"
-	@echo "  postgres-up    - Start test PostgreSQL container"
-	@echo "  postgres-down  - Stop test PostgreSQL container"
-	@echo "  clickhouse-up  - Start test ClickHouse container"
-	@echo "  clickhouse-down - Stop test ClickHouse container"
 	@echo "  e2e            - Run Playwright E2E tests"
-	@echo "  e2e-duckdb     - Run DuckDB-backed Playwright smoke tests"
 	@echo "  memory-e2e     - Run opt-in Claude Code and Codex memory recall gate"
 	@echo "  vet            - Run go vet"
 	@echo "  lint           - Run golangci-lint and NilAway (auto-fix golangci issues)"

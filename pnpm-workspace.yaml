@@ -1,0 +1,6 @@
+packages:
+  - frontend
+  - desktop
+
+lockfile: true
+sharedWorkspaceLockfile: false
