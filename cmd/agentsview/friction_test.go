@@ -72,7 +72,7 @@ func TestNewFrictionCommand_RegistersSubcommands(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, name, child.Name())
 	}
-	for _, name := range []string{"server", "server-token-file", "pg"} {
+	for _, name := range []string{"server", "server-token-file"} {
 		assert.NotNil(t, cmd.PersistentFlags().Lookup(name), name)
 	}
 }

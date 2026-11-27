@@ -69,10 +69,6 @@ func groupCommands(root *cobra.Command) {
 			"Read activity, costs, and statistics from recorded sessions. Use each\n"+
 				"action's --help for its time window, filters, and output formats.", groupUsage,
 			"agentsview report stats --json\nagentsview report activity --preset week\nagentsview report usage daily --no-sync"),
-		newCommandDomain("replica", "Sync and serve database replicas",
-			"Choose pg, duckdb, or clickhouse, then an action such as push, status,\n"+
-				"or serve. Configure a backend before pushing or serving its replica.", groupData,
-			"agentsview replica pg --help\nagentsview replica duckdb status"),
 		newCommandDomain("index", "Build and manage derived search indexes",
 			"Manage semantic embedding generations. Indexes are derived from the\n"+
 				"archive; building or activating one may update local derived data.", groupData,

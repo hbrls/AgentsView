@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -137,9 +136,6 @@ func newChangedPathPlanEngine(
 		Machine:                "remote",
 		ProviderFactories:      providerFactories,
 		ProviderMigrationModes: modes,
-		StoredPathResolver: func(path string) (string, bool) {
-			return path, true
-		},
 	})
 }
 
@@ -315,67 +311,6 @@ func TestPlanChangedPathsClaudeProcessesOnlyChangedSession(t *testing.T) {
 	assert.Equal(t, "session-05", page.Sessions[0].ID)
 }
 
-func TestPlanChangedPathsCodexIndexUsesStoredArchivedDuplicate(t *testing.T) {
-	root := t.TempDir()
-	liveRoot := filepath.Join(root, "sessions")
-	archiveRoot := filepath.Join(root, "archived_sessions")
-	require.NoError(t, os.MkdirAll(liveRoot, 0o755))
-	require.NoError(t, os.MkdirAll(archiveRoot, 0o755))
-	const uuid = "019eb791-cf7d-75c1-8439-9ed74c122abc"
-	livePath := filepath.Join(
-		liveRoot, "2026", "08", "15",
-		"rollout-2026-08-15T10-00-00-"+uuid+".jsonl",
-	)
-	archivePath := filepath.Join(
-		archiveRoot, "rollout-2026-08-14T10-00-00-"+uuid+".jsonl",
-	)
-	for path, content := range map[string]string{
-		livePath:    "live stale copy",
-		archivePath: "archived tracked copy",
-	} {
-		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-		body := testjsonl.JoinJSONL(
-			testjsonl.CodexSessionMetaJSON(
-				uuid, "/workspace/project", "codex_cli_rs", "2026-08-15T10:00:00Z",
-			),
-			testjsonl.CodexMsgJSON("user", content, "2026-08-15T10:00:01Z"),
-		)
-		require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
-	}
-	indexPath := filepath.Join(root, parser.CodexSessionIndexFilename)
-	require.NoError(t, os.WriteFile(indexPath, []byte(
-		`{"id":"`+uuid+`","thread_name":"Renamed title"}`+"\n",
-	), 0o600))
-	database := dbtest.OpenTestDB(t)
-	toStoredPath := func(path string) string {
-		rel, err := filepath.Rel(root, path)
-		if err == nil && !strings.HasPrefix(rel, "..") {
-			return "remote:/codex/" + filepath.ToSlash(rel)
-		}
-		return path
-	}
-	storedPath := toStoredPath(archivePath)
-	oldName := "Old title"
-	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
-		ID: "remote~codex:" + uuid, Agent: string(parser.AgentCodex),
-		Machine: "remote", FilePath: &storedPath, SessionName: &oldName,
-	}))
-	engine := NewEngine(t.Context(), database, EngineConfig{
-		AgentDirs: map[parser.AgentType][]string{
-			parser.AgentCodex: {liveRoot, archiveRoot},
-		},
-		Machine: "remote", IDPrefix: "remote~", PathRewriter: toStoredPath,
-	})
-	t.Cleanup(engine.Close)
-
-	plan, err := engine.PlanChangedPathsContext(t.Context(), []string{indexPath})
-
-	require.NoError(t, err)
-	require.Len(t, plan.Files, 1)
-	assert.Equal(t, archivePath, plan.Files[0].Path)
-	assert.Empty(t, plan.FallbackProviders)
-}
-
 func TestSyncChangedPathPlanPrefersLiveCodexDuplicate(t *testing.T) {
 	root := t.TempDir()
 	liveRoot := filepath.Join(root, "sessions")
@@ -436,118 +371,6 @@ func TestSyncChangedPathPlanPrefersLiveCodexDuplicate(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
 	assert.Equal(t, "preferred live content", messages[0].Content)
-}
-
-func TestPlanChangedPathsOmnigentIncludesStoredDescendants(t *testing.T) {
-	database := dbtest.OpenTestDB(t)
-	physicalRoot := t.TempDir()
-	physicalContainer := filepath.Join(physicalRoot, "chat.db")
-	physicalParent := parser.VirtualSourcePath(physicalContainer, "parent")
-	physicalChild := parser.VirtualSourcePath(physicalContainer, "child")
-	storedContainer := "/remote/omnigent/chat.db"
-	storedParent := parser.VirtualSourcePath(storedContainer, "parent")
-	storedChild := parser.VirtualSourcePath(storedContainer, "child")
-	parentID := "remote~omnigent:parent"
-	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
-		ID: parentID, Agent: string(parser.AgentOmnigent), Machine: "remote",
-		FilePath: &storedParent,
-	}))
-	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
-		ID: "remote~omnigent:child", Agent: string(parser.AgentOmnigent),
-		Machine: "remote", ParentSessionID: &parentID, FilePath: &storedChild,
-	}))
-	parentSource := parser.SourceRef{
-		Provider: parser.AgentOmnigent, Key: physicalParent,
-		DisplayPath: physicalParent, FingerprintKey: physicalParent,
-	}
-	childSource := parser.SourceRef{
-		Provider: parser.AgentOmnigent, Key: physicalChild,
-		DisplayPath: physicalChild, FingerprintKey: physicalChild,
-	}
-	parentResult := processFixtureResult(
-		"omnigent:parent", parser.AgentOmnigent, "project",
-		physicalParent, parser.SourceFingerprint{Key: physicalParent, MTimeNS: 2},
-	)
-	parentResult.Session.Cwd = "/workspace/new"
-	parentResult.Session.GitBranch = "feature"
-	childResult := processFixtureResult(
-		"omnigent:child", parser.AgentOmnigent, "project",
-		physicalChild, parser.SourceFingerprint{Key: physicalChild, MTimeNS: 2},
-	)
-	childResult.Session.Cwd = "/workspace/new"
-	childResult.Session.GitBranch = "feature"
-	childResult.Session.ParentSessionID = "omnigent:parent"
-	var parseRequests []parser.ParseRequest
-	factory := changedPathPlanFactory{
-		agent: parser.AgentOmnigent, caps: changedPathPlanCapabilities(),
-	}
-	factory.caps.Source.CompositeFingerprint = parser.CapabilitySupported
-	factory.provider = func(parser.ProviderConfig) *changedPathPlanProvider {
-		return &changedPathPlanProvider{
-			relevance: parser.ChangedPathDataBearing,
-			sources:   []parser.SourceRef{parentSource},
-			reconciled: map[string]parser.SourceRef{
-				physicalChild: childSource,
-			},
-			fingerprints: map[string]parser.SourceFingerprint{
-				physicalParent: {Key: physicalParent, MTimeNS: 2},
-				physicalChild:  {Key: physicalChild, MTimeNS: 2},
-			},
-			outcomes: map[string]parser.ParseOutcome{
-				physicalParent: {
-					Results: []parser.ParseResultOutcome{{
-						Result: parentResult, DataVersion: parser.DataVersionCurrent,
-					}},
-					ResultSetComplete: true,
-				},
-				physicalChild: {
-					Results: []parser.ParseResultOutcome{{
-						Result: childResult, DataVersion: parser.DataVersionCurrent,
-					}},
-					ResultSetComplete: true,
-				},
-			},
-			parseRequests: &parseRequests,
-		}
-	}
-	engine := NewEngine(t.Context(), database, EngineConfig{
-		AgentDirs: map[parser.AgentType][]string{
-			parser.AgentOmnigent: {physicalRoot},
-		},
-		Machine: "remote", IDPrefix: "remote~",
-		ProviderFactories: []parser.ProviderFactory{factory},
-		ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
-			parser.AgentOmnigent: parser.ProviderMigrationProviderAuthoritative,
-		},
-		StoredPathResolver: func(path string) (string, bool) {
-			if path == storedChild {
-				return physicalChild, true
-			}
-			return "", false
-		},
-	})
-	t.Cleanup(engine.Close)
-
-	plan, err := engine.PlanChangedPathsContext(
-		t.Context(), []string{physicalContainer},
-	)
-
-	require.NoError(t, err)
-	require.Len(t, plan.Files, 2)
-	assert.ElementsMatch(t, []string{physicalParent, physicalChild}, []string{
-		plan.Files[0].Path, plan.Files[1].Path,
-	})
-	assert.Empty(t, plan.FallbackProviders)
-
-	result, err := engine.SyncChangedPathPlanContext(t.Context(), plan, nil)
-	require.NoError(t, err)
-	assert.Equal(t, 2, result.FilesProcessed)
-	require.Len(t, parseRequests, 2)
-	child, err := database.GetSession(t.Context(), "remote~omnigent:child")
-	require.NoError(t, err)
-	require.NotNil(t, child)
-	assert.Equal(t, "/workspace/new", child.Cwd)
-	assert.Equal(t, "feature", child.GitBranch)
 }
 
 func TestPlanChangedPathsDeletionClassifiesWithoutPhysicalStat(t *testing.T) {
@@ -663,67 +486,6 @@ func TestPlanChangedPathsDoesNotScanClaudeCorpusForExactBatch(t *testing.T) {
 		require.Len(t, attribution.files, 1)
 		assert.Equal(t, sourcePath, attribution.files[0].Path)
 	}
-}
-
-func TestPlanChangedPathsTranslatesStoredHintsOrFallsBack(t *testing.T) {
-	root := t.TempDir()
-	changedPath := filepath.Join(root, "container.db")
-	require.NoError(t, os.WriteFile(changedPath, []byte("fixture"), 0o600))
-	storedPath := "remote:/sessions/container.db#member"
-	physicalHint := changedPath + "#member"
-	storedContainer := "remote:/sessions/container.db"
-	caps := changedPathPlanCapabilities()
-	caps.Source.StoredSourceHints = parser.CapabilitySupported
-	var requests []parser.ChangedPathRequest
-	factory := changedPathPlanFactory{agent: "plan-hints", caps: caps}
-	factory.provider = func(parser.ProviderConfig) *changedPathPlanProvider {
-		return &changedPathPlanProvider{
-			relevance: parser.ChangedPathDataBearing,
-			hintScopes: []parser.StoredSourceHintScope{{
-				Path: changedPath, IncludeVirtualMembers: true,
-			}},
-			requests: &requests,
-			sources: []parser.SourceRef{{
-				Provider: factory.agent, Key: physicalHint,
-				DisplayPath: physicalHint, FingerprintKey: physicalHint,
-			}},
-		}
-	}
-	database := dbtest.OpenTestDB(t)
-	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
-		ID: "plan-hints:member", Agent: string(factory.agent), Machine: "remote",
-		Project: "fixture", FilePath: &storedPath,
-	}))
-	engine := NewEngine(t.Context(), database, EngineConfig{
-		AgentDirs: map[parser.AgentType][]string{factory.agent: {root}},
-		Machine:   "remote", ProviderFactories: []parser.ProviderFactory{factory},
-		ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
-			factory.agent: parser.ProviderMigrationProviderAuthoritative,
-		},
-		StoredPathResolver: func(path string) (string, bool) {
-			return physicalHint, path == storedPath
-		},
-		PathRewriter: func(path string) string {
-			if path == changedPath {
-				return storedContainer
-			}
-			return path
-		},
-	})
-
-	plan, err := engine.PlanChangedPathsContext(t.Context(), []string{changedPath})
-	require.NoError(t, err)
-	assert.Empty(t, plan.FallbackProviders)
-	require.Len(t, requests, 1)
-	assert.Equal(t, []string{physicalHint}, requests[0].StoredSourcePaths)
-
-	engine.storedPathResolver = func(string) (string, bool) { return "", false }
-	requests = nil
-	plan, err = engine.PlanChangedPathsContext(t.Context(), []string{changedPath})
-	require.NoError(t, err)
-	assert.Empty(t, plan.Files)
-	assert.Equal(t, []parser.AgentType{factory.agent}, plan.FallbackProviders)
-	assert.Empty(t, requests, "untranslated hints must prevent bounded classification")
 }
 
 func TestPlanChangedPathsRejectsUntrustedInputAndOwnership(t *testing.T) {

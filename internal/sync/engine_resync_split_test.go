@@ -531,8 +531,8 @@ func TestResyncMappingFailureKeepsOriginalArchive(t *testing.T) {
 				}
 			}
 
-			stats, err := engine.resyncAllWithOptionsAndOperations(
-				ctx, nil, RebuildOptions{}, operations,
+			stats, err := engine.resyncAllWithOperationsLocked(
+				ctx, nil, operations,
 			)
 			require.ErrorIs(t, err, sentinel)
 			assert.True(t, stats.Aborted)
@@ -572,8 +572,8 @@ func TestResyncAbortsWhenReplacementCloseFails(t *testing.T) {
 	// rebuild hook is the last ops seam that sees the open temp DB), so the
 	// build's final Close cannot drain.
 	var pinned *sql.Rows
-	stats, err := e.resyncAllWithOptionsAndOperations(
-		t.Context(), nil, RebuildOptions{}, rebuildOperations{
+	stats, err := e.resyncAllWithOperationsLocked(
+		t.Context(), nil, rebuildOperations{
 			rebuildFTS: func(ctx context.Context, newDB *db.DB) error {
 				if err := newDB.RebuildFTS(t.Context()); err != nil {
 					return err
@@ -936,12 +936,12 @@ func TestResyncAbortsWhenReplacementCheckpointFails(t *testing.T) {
 
 	var pinned *sql.Rows
 	var details []string
-	stats, err := e.resyncAllWithOptionsAndOperations(
+	stats, err := e.resyncAllWithOperationsLocked(
 		t.Context(), func(p Progress) {
 			if isResyncPublicationDetail(p.Detail) {
 				details = append(details, p.Detail)
 			}
-		}, RebuildOptions{}, rebuildOperations{
+		}, rebuildOperations{
 			rebuildUsageIndexes: func(ctx context.Context, newDB *db.DB) error {
 				if err := newDB.RebuildBulkImportIndexes(ctx); err != nil {
 					return err

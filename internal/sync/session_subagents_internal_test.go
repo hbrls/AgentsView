@@ -14,7 +14,7 @@ import (
 )
 
 func TestTrySessionRefreshRefusesContentionAtEachStage(t *testing.T) {
-	for _, stage := range []string{"parent", "local child", "s3 child"} {
+	for _, stage := range []string{"parent", "local child"} {
 		t.Run(stage, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				database := openTestDB(t)
@@ -23,9 +23,6 @@ func TestTrySessionRefreshRefusesContentionAtEachStage(t *testing.T) {
 				require.NoError(t, os.MkdirAll(filepath.Dir(parentPath), 0o755))
 				require.NoError(t, os.WriteFile(parentPath, []byte(testjsonl.NewSessionBuilder().
 					AddClaudeUser("2026-01-01T00:00:00Z", "parent transcript").String()), 0o600))
-				if stage == "s3 child" {
-					parentPath = "s3://bucket/host-a/raw/claude/project/parent.jsonl"
-				}
 				require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 					ID: "parent", Agent: "claude", Project: "project", FilePath: new(parentPath),
 				}))
@@ -70,13 +67,6 @@ func TestTrySessionRefreshRefusesContentionAtEachStage(t *testing.T) {
 				}
 				if stage == "parent" {
 					holdSync()
-				}
-				if stage == "s3 child" {
-					oldStat := statClaudeS3Session
-					statClaudeS3Session = func(string) (parser.S3Object, error) {
-						return parser.S3Object{}, missingS3ObjectError()
-					}
-					t.Cleanup(func() { statClaudeS3Session = oldStat })
 				}
 
 				err := engine.TrySyncSessionWithSubagentsContext(t.Context(), "parent")

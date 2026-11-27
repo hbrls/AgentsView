@@ -19,10 +19,9 @@ const (
 // unsupported results, but scheduling and validation should trust this
 // declaration once a provider has migrated off the legacy adapter.
 type Capabilities struct {
-	Source     SourceCapabilities
-	Content    ContentCapabilities
-	Sync       ProviderSyncSemantics
-	RawCapture RawCaptureCapabilities
+	Source  SourceCapabilities
+	Content ContentCapabilities
+	Sync    ProviderSyncSemantics
 }
 
 // UnchangedResultPolicy controls how the engine compares parsed members from a

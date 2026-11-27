@@ -847,7 +847,6 @@ func (s *codexStagingSink) forkResultEvents(ctx context.Context, key string) ([]
 			&event.RawContentDigest, &event.SummaryParticipates); err != nil {
 			return nil, err
 		}
-		event.SubagentSessionID = applyIDPrefixToID(s.idPrefix, event.SubagentSessionID)
 		event.EventIndex = len(events)
 		events = append(events, event)
 	}

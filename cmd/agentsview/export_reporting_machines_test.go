@@ -18,7 +18,7 @@ import (
 func TestExportReportingByMachine(t *testing.T) {
 	dataDir := testDataDir(t)
 	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
-	require.NoError(t, database.ConfigureArtifactLocalMachine(t.Context(), "origin-a"))
+	require.NoError(t, database.AdoptMachineIdentity(t.Context(), "origin-a", nil))
 	require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `
 			INSERT INTO archive_metadata(key, value) VALUES ('archive_id', 'machine-test-archive')

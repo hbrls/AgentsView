@@ -15,10 +15,6 @@ func TestCoordinatedSyncReportsWaitingWithoutReplacingActiveProgress(t *testing.
 			_, err := e.SyncThenRun(ctx, false, p, func(bool) error { return nil })
 			return err
 		},
-		"rebuild": func(e *Engine, ctx context.Context, p ProgressFunc) error {
-			_, err := e.SyncThenRunWithRebuild(ctx, false, p, nil, nil, func(bool, bool) error { return nil })
-			return err
-		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			fx := newEngineFixture(t)

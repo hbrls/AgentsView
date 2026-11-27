@@ -23,12 +23,12 @@ func TestArchivePolicySuppressesCodexPublication(t *testing.T) {
 			var observed []string
 			engine := NewEngine(t.Context(), database, EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}},
-				Machine:   "source", IDPrefix: "installation~", Ephemeral: true,
+				Machine:   "source", Ephemeral: true,
 				ArchiveReparse: true, StagedCodexParseMinBytes: threshold,
 				DiscardPendingWritesOnCancel: true,
 				ArchiveSessionPolicy: func(_ context.Context, s *db.Session, native string) (bool, error) {
 					observed = append(observed, native)
-					assert.Equal(t, "installation~codex:"+id, s.ID)
+					assert.Equal(t, "codex:"+id, s.ID)
 					return false, nil
 				},
 			})
@@ -36,10 +36,10 @@ func TestArchivePolicySuppressesCodexPublication(t *testing.T) {
 			stats := engine.SyncAll(t.Context(), nil)
 			require.Zero(t, stats.Failed)
 			assert.Equal(t, []string{"codex:" + id}, observed)
-			stored, err := database.GetSessionFull(t.Context(), "installation~codex:"+id)
+			stored, err := database.GetSessionFull(t.Context(), "codex:"+id)
 			require.NoError(t, err)
 			assert.Nil(t, stored)
-			messages, err := database.GetAllMessages(t.Context(), "installation~codex:"+id)
+			messages, err := database.GetAllMessages(t.Context(), "codex:"+id)
 			require.NoError(t, err)
 			assert.Empty(t, messages)
 		})

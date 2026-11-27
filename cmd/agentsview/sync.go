@@ -17,7 +17,6 @@ import (
 	"github.com/doordash-oss/oapi-codegen-dd/v3/pkg/runtime"
 
 	"go.kenn.io/agentsview/internal/apiclient"
-	"go.kenn.io/agentsview/internal/archivesource"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
@@ -797,14 +796,6 @@ func runLocalSyncAuthoritative(
 	ctx context.Context, appCfg config.Config, database *db.DB, full bool,
 ) (bool, error) {
 	didResync, stats, err := runLocalSyncResult(ctx, appCfg, database, full)
-	if _, pending := errors.AsType[archivesource.DrainError](err); pending && ctx.Err() == nil && !database.NeedsResync() && stats.Deferred == 0 {
-		// The coordinator drains attachments only after local ingestion
-		// completes. Its merged statistics may include attachment failures.
-		// An installed rebuild can still hold deferred sources, which must
-		// not reach an authoritative push.
-		log.Printf("attachment ingestion warning: %v", err)
-		return didResync, nil
-	}
 	if err != nil {
 		return didResync, err
 	}
@@ -891,11 +882,6 @@ func coordinateLocalSync(
 
 	engine := sync.NewEngine(ctx, database, localSyncEngineConfig(appCfg))
 	defer engine.Close()
-	attached, err := archivesource.NewManager(ctx, appCfg, database, engine, nil)
-	if err != nil {
-		return didResync, stats, err
-	}
-	defer attached.Close()
 
 	if fallbackOnAbort {
 		stats, err = engine.SyncThenRun(
@@ -920,17 +906,12 @@ func coordinateLocalSync(
 	if !stats.ProcessingCompleteOrRetrying() {
 		return didResync, stats, errors.New("local sync processing incomplete")
 	}
-	archiveStats, err := attached.Drain(ctx, progress)
-	stats.Merge(archiveStats)
-	return didResync, stats, err
+	return didResync, stats, nil
 }
 
 func localSyncEngineConfig(appCfg config.Config) sync.EngineConfig {
 	return sync.EngineConfig{
-		AgentDirs: appCfg.AgentDirs,
-		RebuildSources: func(ctx context.Context) (sync.RebuildOptions, error) {
-			return archivesource.RebuildContributors(ctx, appCfg)
-		},
+		AgentDirs:               appCfg.AgentDirs,
 		SourceMachines:          appCfg.SourceMachines,
 		ProviderMetadata:        appCfg.ProviderMetadata,
 		DisabledAgents:          appCfg.DisabledAgents,

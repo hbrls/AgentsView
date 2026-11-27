@@ -349,10 +349,6 @@ func New(
 	if err != nil {
 		return nil, err
 	}
-	if err = RejectHostedPush(ctx, pg); err != nil {
-		pg.Close()
-		return nil, err
-	}
 	targetFingerprint, err := pgTargetFingerprint(pgURL, schema)
 	if err != nil {
 		pg.Close()
@@ -513,16 +509,6 @@ func (s *Sync) ensureSchemaLocked(ctx context.Context) error {
 		// leaves semantic search unavailable but must not fail the push.
 		if _, err := ensureVectorBaseSchemaPG(ctx, s.pg); err != nil {
 			log.Printf("pg schema: vector schema setup failed: %v", err)
-		}
-		// A restricted push role may lack CREATE on a schema that a
-		// privileged role provisioned. Raw custody is server-side only,
-		// so skip it here rather than failing every push; the full
-		// EnsureSchema bootstrap path still requires it.
-		if err := ensureRawIngestSchemaPG(ctx, s.pg); err != nil {
-			if !isInsufficientPrivilege(err) {
-				return err
-			}
-			log.Printf("pg schema: raw custody schema skipped, insufficient privilege: %v", err)
 		}
 		s.schemaDone = true
 		return nil

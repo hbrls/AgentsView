@@ -73,7 +73,6 @@ func TestDeploymentArgs(t *testing.T) {
 		want string
 	}{
 		{name: "serve", mode: "serve", args: []string{"--no-browser", "--help"}, want: "agentsview serve [flags]"},
-		{name: "pg-serve", mode: "pg-serve", args: []string{"--port=9000", "--help"}, want: "agentsview replica pg serve [flags]"},
 		{name: "explicit subcommand", mode: "pg-serve", args: []string{"mcp", "--help"}, want: "agentsview mcp [flags]"},
 		{name: "root version", mode: "serve", args: []string{"--version"}, want: "agentsview"},
 		{name: "root help", mode: "serve", args: []string{"--help"}, want: "agentsview <command> [flags]"},

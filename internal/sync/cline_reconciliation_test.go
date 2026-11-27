@@ -3,7 +3,6 @@ package sync
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -148,96 +147,3 @@ func TestClineReconciliation_DeletedMetadataLifecycle(t *testing.T) {
 	}
 }
 
-func TestClineRemoteIdentityStableAcrossResyncs(t *testing.T) {
-	root := t.TempDir()
-	sessDir := filepath.Join(root, "data", "sessions", "sess-remote")
-	require.NoError(t, os.MkdirAll(sessDir, 0o755))
-
-	metaPath := filepath.Join(sessDir, "sess-remote.json")
-	require.NoError(t, os.WriteFile(metaPath, []byte(`{"session_id":"sess-remote","cwd":"/workspace"}`), 0o644))
-	parentPath := filepath.Join(sessDir, "sess-remote.messages.json")
-	parentJSON := `{"messages":[
-		{"id":"p1","role":"assistant","content":[{"type":"tool_use","id":"run-worker","name":"team_run_task","input":{"agentId":"worker","taskId":"task-1"}}],"ts":1000},
-		{"id":"p2","role":"user","content":[{"type":"tool_result","tool_use_id":"run-worker","content":"done"}],"ts":2000}
-	]}`
-	require.NoError(t, os.WriteFile(parentPath, []byte(parentJSON), 0o644))
-	teammatePath := filepath.Join(sessDir, "worker__remote.messages.json")
-	teammateJSON := func(text string) string {
-		return `{"sessionId":"sess-remote__teamtask__worker__remote","origin":{"subagent":"worker"},"messages":[{"id":"t1","role":"user","content":[{"type":"text","text":"` + text + `"}],"ts":1100}]}`
-	}
-	require.NoError(t, os.WriteFile(teammatePath, []byte(teammateJSON("first")), 0o644))
-
-	logicalRoot := "remote:/cline"
-	rewrite := func(path string) string {
-		if strings.HasPrefix(path, logicalRoot+"/") {
-			return path
-		}
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			return path
-		}
-		return logicalRoot + "/" + filepath.ToSlash(rel)
-	}
-	resolve := func(path string) (string, bool) {
-		rel, ok := strings.CutPrefix(path, logicalRoot+"/")
-		if !ok {
-			return "", false
-		}
-		return filepath.Join(root, filepath.FromSlash(rel)), true
-	}
-
-	database := dbtest.OpenTestDB(t)
-	engine := NewEngine(t.Context(), database, EngineConfig{
-		AgentDirs: map[parser.AgentType][]string{parser.AgentCline: {root}},
-		Machine:   "remote-host", IDPrefix: "remote-host~",
-		PathRewriter: rewrite, StoredPathResolver: resolve,
-	})
-	t.Cleanup(engine.Close)
-
-	parentID := "remote-host~cline:sess-remote"
-	childID := "remote-host~cline:sess-remote__teamtask__worker__remote"
-	readIdentity := func() (string, string, string, string) {
-		t.Helper()
-		parent, err := database.GetSessionFull(t.Context(), parentID)
-		require.NoError(t, err)
-		require.NotNil(t, parent)
-		messages, err := database.GetAllMessages(t.Context(), parentID)
-		require.NoError(t, err)
-		var link, resultLink string
-		for _, message := range messages {
-			for _, call := range message.ToolCalls {
-				if call.ToolName == "team_run_task" {
-					link = call.SubagentSessionID
-					if len(call.ResultEvents) == 1 {
-						resultLink = call.ResultEvents[0].SubagentSessionID
-					}
-				}
-			}
-		}
-		return parent.ID, childID, link, resultLink
-	}
-
-	first := engine.SyncAll(t.Context(), nil)
-	require.Positive(t, first.Synced)
-	wantParent, wantChild, wantLink, wantResultLink := readIdentity()
-	assert.Equal(t, wantParent, parentID)
-	assert.Equal(t, wantChild, childID)
-	assert.Equal(t, wantLink, childID)
-	assert.Equal(t, wantResultLink, childID)
-
-	for _, text := range []string{"second", "third"} {
-		require.NoError(t, os.WriteFile(teammatePath, []byte(teammateJSON(text)), 0o644))
-		res := engine.SyncAll(t.Context(), nil)
-		require.Positive(t, res.Synced)
-		gotParent, gotChild, gotLink, gotResultLink := readIdentity()
-		assert.Equal(t, wantParent, gotParent)
-		assert.Equal(t, wantChild, gotChild)
-		assert.Equal(t, wantLink, gotLink)
-		assert.Equal(t, wantResultLink, gotResultLink)
-	}
-
-	storedPath := rewrite(teammatePath)
-	ids, err := database.ListSessionIDsByFilePath(t.Context(), storedPath, string(parser.AgentCline))
-	require.NoError(t, err)
-	assert.Equal(t, []string{childID}, ids)
-}

@@ -643,20 +643,16 @@ func TestCodexRevertPageRebuildPreservesDeletionState(t *testing.T) {
 		name        string
 		version     int
 		trash       bool
-		prefix      string
 		pagePath    bool
 		missingPage bool
 	}{
-		{"upgrade_deleted", 130, false, "", false, false},
-		{"upgrade_trashed", 130, true, "", false, false},
-		{"current_deleted", 131, false, "", false, false},
-		{"current_trashed", 131, true, "", false, false},
-		{"remote_upgrade_deleted", 130, false, "host_a~", false, false},
-		{"remote_upgrade_trashed", 130, true, "host_a~", false, false},
-		{"upgrade_trashed_page_path", 130, true, "", true, false},
-		{"upgrade_deleted_missing_page", 130, false, "", false, true},
-		{"current_deleted_missing_page", 131, false, "", false, true},
-		{"remote_upgrade_deleted_missing_page", 130, false, "host_a~", false, true},
+		{"upgrade_deleted", 130, false, false, false},
+		{"upgrade_trashed", 130, true, false, false},
+		{"current_deleted", 131, false, false, false},
+		{"current_trashed", 131, true, false, false},
+		{"upgrade_trashed_page_path", 130, true, true, false},
+		{"upgrade_deleted_missing_page", 130, false, false, true},
+		{"current_deleted_missing_page", 131, false, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -677,7 +673,7 @@ func TestCodexRevertPageRebuildPreservesDeletionState(t *testing.T) {
 				}
 			}
 			database := openTestDB(t)
-			threadID := tc.prefix + paginationSessionID(0)
+			threadID := paginationSessionID(0)
 			require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 				ID: threadID, Agent: "codex", Project: "sample", Machine: "local",
 				FilePath: &headPath, MessageCount: 1,
@@ -703,7 +699,7 @@ func TestCodexRevertPageRebuildPreservesDeletionState(t *testing.T) {
 			t.Cleanup(func() { _ = reopened.Close() })
 			engine := NewEngine(t.Context(), reopened, EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}},
-				Machine:   "local", IDPrefix: tc.prefix,
+				Machine:   "local",
 			})
 			t.Cleanup(engine.Close)
 			stats, err := engine.SyncThenRun(t.Context(), true, nil, func(bool) error { return nil })
@@ -712,7 +708,7 @@ func TestCodexRevertPageRebuildPreservesDeletionState(t *testing.T) {
 			require.Zero(t, stats.Failed)
 
 			for page := 1; page < 3; page++ {
-				id := tc.prefix + paginationSessionID(page)
+				id := paginationSessionID(page)
 				session, err := reopened.GetSession(t.Context(), id)
 				require.NoError(t, err)
 				if tc.version < 131 {
@@ -744,7 +740,7 @@ func TestCodexRevertPageRebuildPreservesDeletionState(t *testing.T) {
 				require.Zero(t, stats.Failed)
 				require.NoError(t, os.WriteFile(missingPath, missingContent, 0o600))
 				require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
-				page, err := reopened.GetSession(t.Context(), tc.prefix+paginationSessionID(2))
+				page, err := reopened.GetSession(t.Context(), paginationSessionID(2))
 				require.NoError(t, err)
 				if tc.version < 131 {
 					assert.Nil(t, page, "a returning file must stay deleted after the upgrade")
@@ -826,16 +822,12 @@ func TestCodexOlderHeaderRevertPageSecondSyncReparsesNothing(t *testing.T) {
 func TestCodexOlderHeaderRevertPageUpgradeMovesCuration(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
-		prefix      string
 		sources     bool
-		mirrorPath  bool
 		archiveOnly bool
 	}{
-		{"sources_present", "", true, false, false},
-		{"sources_missing", "", false, false, false},
-		{"http_mirror_paths", "host_a~", false, true, false},
-		{"archive_only", "", false, false, true},
-		{"archive_only_http_mirror", "host_a~", false, true, true},
+		{"sources_present", true, false},
+		{"sources_missing", false, false},
+		{"archive_only", false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -854,15 +846,12 @@ func TestCodexOlderHeaderRevertPageUpgradeMovesCuration(t *testing.T) {
 						codexUserEntryJSON("2026-09-20T10:00:01Z", "Unrelated")+"\n"+
 						codexAssistantEntryJSON("2026-09-20T10:00:02Z", "Reply")+"\n")
 			}
-			rolloutID := func(page int) string { return tc.prefix + "codex:" + paginationRollouts[page] }
-			pageID := func(page int) string { return tc.prefix + paginationSessionID(page) }
+			rolloutID := func(page int) string { return "codex:" + paginationRollouts[page] }
+			pageID := func(page int) string { return paginationSessionID(page) }
 
 			database := openTestDB(t)
 			for page := 1; page < 4; page++ {
 				stored := paths[page]
-				if tc.mirrorPath {
-					stored = "host_a:/remote/" + filepath.Base(paths[page])
-				}
 				require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 					ID: rolloutID(page), Agent: "codex", Project: "sample", Machine: "local",
 					MessageCount: 2, FilePath: &stored,
@@ -915,7 +904,7 @@ func TestCodexOlderHeaderRevertPageUpgradeMovesCuration(t *testing.T) {
 			// ResyncAll preserves the archive rows instead of reparsing files.
 			upgraded := NewEngine(t.Context(), reopened, EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}},
-				Machine:   "local", IDPrefix: tc.prefix,
+				Machine:   "local",
 			})
 			t.Cleanup(upgraded.Close)
 			var stats SyncStats

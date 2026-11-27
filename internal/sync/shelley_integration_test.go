@@ -327,57 +327,6 @@ func TestShelleySyncAllAndResyncAllArchiveBehavior(t *testing.T) {
 	assert.Equal(t, 2, gone.MessageCount, "preserved message count")
 }
 
-func TestSyncShelleyRemotePathRewriterSkip(t *testing.T) {
-	dir := t.TempDir()
-	dbPath := createShelleyMainDB(t, dir)
-
-	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
-		AgentDirs: map[parser.AgentType][]string{
-			parser.AgentShelley: {dir},
-		},
-		Machine:  "host",
-		IDPrefix: "host~",
-		PathRewriter: func(path string) string {
-			return "host:" + path
-		},
-	})
-
-	stats := engine.SyncAll(t.Context(), nil)
-	require.False(t, stats.Aborted, "first sync aborted: %+v", stats)
-	assert.Equal(t, 1, stats.Synced, "first sync should write the session")
-
-	const sessionID = "host~shelley:cMAIN1"
-	storedPath := "host:" + dbPath + "#cMAIN1"
-	assert.Equal(t, storedPath,
-		database.GetSessionFilePath(t.Context(), sessionID), "stored remote path")
-	before, err := database.GetSessionFull(t.Context(), sessionID)
-	require.NoError(t, err, "GetSessionFull before second sync")
-	require.NotNil(t, before, "session before second sync")
-	require.NotNil(t, before.LocalModifiedAt,
-		"local_modified_at before second sync")
-	_, storedMtime, ok := database.GetFileInfoByPath(t.Context(), storedPath)
-	require.True(t, ok, "remote virtual path should be indexed")
-	assert.NotZero(t, storedMtime, "stored mtime")
-
-	stats = engine.SyncAll(t.Context(), nil)
-	require.False(t, stats.Aborted, "second sync aborted: %+v", stats)
-	assert.Equal(t, 0, stats.Synced,
-		"unchanged remote Shelley conversation should be skipped")
-
-	after, err := database.GetSessionFull(t.Context(), sessionID)
-	require.NoError(t, err, "GetSessionFull after second sync")
-	require.NotNil(t, after, "session after second sync")
-	require.NotNil(t, after.LocalModifiedAt,
-		"local_modified_at after second sync")
-	assert.Equal(t, *before.LocalModifiedAt, *after.LocalModifiedAt,
-		"skip lookup must use the rewritten virtual path")
-}
-
-// TestSyncShelleyForceReplaceOnInPlaceUpdate verifies that when a
-// message's content changes in place (Shelley rewrites rows and bumps
-// updated_at), a re-sync fully replaces the session's messages rather
-// than appending duplicates.
 func TestSyncShelleyForceReplaceOnInPlaceUpdate(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := createShelleyDB(t, dir)

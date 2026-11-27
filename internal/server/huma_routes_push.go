@@ -1,24 +1,7 @@
 package server
 
 import (
-	"context"
-	"errors"
-	"fmt"
-	"log"
-	"net/http"
-	"path/filepath"
-	"strings"
-	gosync "sync"
 	"time"
-
-	"github.com/danielgtaylor/huma/v2"
-	"go.kenn.io/agentsview/internal/archivepush"
-	"go.kenn.io/agentsview/internal/archivesource"
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/storage"
-	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
 // pushProgressLogInterval bounds how often the daemon-side push handlers log

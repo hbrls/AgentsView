@@ -535,9 +535,6 @@ type EngineConfig struct {
 	// touching working directories recorded in imported transcripts. Bounded
 	// capture uses lexical metadata instead.
 	DisableFilesystemProjectDiscovery bool
-	// StableSourceSnapshots reports that configured source files are immutable
-	// for this engine. Bounded capture sets it after copying quiescent sources.
-	StableSourceSnapshots bool
 	// ArchiveContent tightens the database handle's storage policy before
 	// the engine writes. The handle is the single authority afterwards; a
 	// looser engine value never weakens a policy the handle already holds.
@@ -561,8 +558,6 @@ type EngineConfig struct {
 	// stalled. Zero uses the production default. Tests and embedders may use a
 	// shorter interval without changing the daemon-wide policy.
 	ProgressStallAfter time.Duration
-	// RebuildSources prepares configured non-filesystem sources inside the rebuild lock.
-	RebuildSources func(context.Context) (RebuildOptions, error)
 	// ProviderFactories and ProviderMigrationModes select which concrete
 	// providers own discovery and parsing for their agents. Nil uses the
 	// parser package registry/manifest.
@@ -572,8 +567,7 @@ type EngineConfig struct {
 
 // Engine orchestrates session file discovery and sync.
 type Engine struct {
-	sourceSyncErr  error
-	rebuildSources func(context.Context) (RebuildOptions, error)
+	sourceSyncErr error
 
 	db *db.DB
 	// Rebuilds swap db temporarily; annotation writes must stay on the live archive.
@@ -2286,8 +2280,7 @@ func (e *Engine) classifyProviderChangedPath(
 				// whole-container child digest scan.
 				AllowWatermarkOnlySources: true,
 			}
-			if watermarkContainer != "" && watermarkPreStateOK &&
-				!e.forceParse && e.pathRewriter == nil {
+			if watermarkContainer != "" && watermarkPreStateOK && !e.forceParse {
 				request.StoredMemberFreshnessPage = e.storedMemberFreshnessPager(watermarkContainer, def.IDPrefix, nil)
 			}
 			if provider.Capabilities().Source.StoredSourceHints == parser.CapabilitySupported {
@@ -3318,15 +3311,7 @@ func (e *Engine) resyncBuildLocked(
 	ctx context.Context, onProgress ProgressFunc, opts RebuildOptions,
 	ops rebuildOperations, restoreActiveWriterOnAbort bool,
 ) (stats SyncStats, retErr error) {
-	if e.rebuildSources != nil {
-		sources, err := e.rebuildSources(ctx)
-		if err != nil {
-			return SyncStats{Aborted: true, Warnings: []string{err.Error()}}, err
-		}
-		opts.Contributors = append(opts.Contributors, sources.Contributors...)
-		opts.UnavailableContributorIDPrefixes = append(opts.UnavailableContributorIDPrefixes, sources.UnavailableContributorIDPrefixes...)
-	}
-	if e.sourceSyncErr != nil && (!errors.Is(e.sourceSyncErr, db.ErrArchiveOnly) || len(opts.Contributors) > 0) {
+	if e.sourceSyncErr != nil && !errors.Is(e.sourceSyncErr, db.ErrArchiveOnly) {
 		return SyncStats{Aborted: true}, e.sourceSyncErr
 	}
 	e.clearPiebaldFailureMemo()
@@ -11221,13 +11206,6 @@ func (e *Engine) collectAndBatchWithOptions(
 		if !e.discardWritesOnCancel {
 			completionCtx = context.WithoutCancel(ctx)
 		}
-		if err := e.validateSourceSessionOwnership(completionCtx, r.processResult); err != nil {
-			log.Printf("validate source session ownership: %v", err)
-			stats.RecordFailed()
-			e.noteSQLiteContainerResult(r.containerResultPath(), false)
-			r.releaseAll()
-			continue
-		}
 		sourceAllowsParserExclusions := e.sourceAllowsParserExclusions(
 			r.processResult,
 		)
@@ -11243,7 +11221,6 @@ func (e *Engine) collectAndBatchWithOptions(
 		for _, result := range r.results {
 			resultIDs = append(resultIDs, result.Session.ID)
 		}
-		resultIDs = e.applyIDPrefixToSessionIDs(resultIDs)
 		children, err := e.db.SubagentChildSessionIDs(completionCtx, append(
 			append([]string{}, excluded...), resultIDs...,
 		))
@@ -12597,11 +12574,10 @@ func (e *Engine) processProviderFile(
 	}
 	machine := e.machineForFile(file)
 	providerConfig := parser.ProviderConfig{
-		Roots:                 e.sources().agentDirs[file.Agent],
-		Machine:               e.machine,
-		StableSourceSnapshots: e.stableSourceSnapshots,
-		SourceMachines:        e.sources().sourceMachines[file.Agent],
-		PathRewriter:          e.pathRewriter,
+		Roots:          e.sources().agentDirs[file.Agent],
+		Machine:        e.machine,
+		SourceMachines: e.sources().sourceMachines[file.Agent],
+		PathRewriter:   e.pathRewriter,
 	}
 	provider := factory.NewProvider(providerConfig)
 
@@ -14571,10 +14547,6 @@ func (e *Engine) applyProviderFilePathPolicies(
 	res *processResult,
 	idPrefix string,
 ) {
-	// Captured identities share paths; the archive policy validates each ID.
-	if e.archiveSessionPolicy != nil {
-		return
-	}
 	if len(res.results) == 0 {
 		return
 	}
@@ -15559,6 +15531,41 @@ func normalizeSourceHashSkipCache(
 	return index, ambiguous
 }
 
+// InjectSkipCache seeds the in-memory skip cache. Tests use it to restore
+// warm state without persisting entries.
+func (e *Engine) InjectSkipCache(entries map[string]int64) {
+	e.skipMu.Lock()
+	defer e.skipMu.Unlock()
+	if e.skipHashKeys == nil {
+		e.skipHashKeys, _ = normalizeSourceHashSkipCache(e.skipCache)
+	}
+	incoming := make(map[string]int64, len(entries))
+	maps.Copy(incoming, entries)
+	_, ambiguous := normalizeSourceHashSkipCache(incoming)
+	for base := range ambiguous {
+		e.removeSkipHashSiblingsLocked(base + sourceHashSkipMarker)
+	}
+	for path, mtime := range incoming {
+		e.removeSkipHashSiblingsLocked(path)
+		if old, exists := e.skipCache[path]; !exists || old != mtime {
+			e.skipCacheDirty = true
+		}
+		e.skipCache[path] = mtime
+		if base, _, hashed := strings.Cut(path, sourceHashSkipMarker); hashed {
+			e.skipHashKeys[base] = path
+		}
+	}
+}
+
+// SnapshotSkipCache returns a copy of the in-memory skip cache.
+func (e *Engine) SnapshotSkipCache() map[string]int64 {
+	e.skipMu.RLock()
+	defer e.skipMu.RUnlock()
+	out := make(map[string]int64, len(e.skipCache))
+	maps.Copy(out, e.skipCache)
+	return out
+}
+
 // cacheSkip records a file so it won't be retried until its mtime changes.
 // The returned work count measures sibling-index probes and is used by the
 // cardinality regression to keep watcher-time work independent of cache size.
@@ -16225,20 +16232,11 @@ func (e *Engine) providerStatFreshnessMtime(
 // providerStatDigestEligible reports whether this engine may stage,
 // stamp, or consult a provider_freshness stat digest for the agent. The
 // content-hashing JSONL providers (Claude, Codex family, Evener) are
-// ineligible under a pathRewriter: a remote import materializes a fresh
-// physical file whose mtime is copied from the remote and whose ctime is
-// the import clock, so a same-stat different-content re-download can
-// collide with a stored digest inside one coarse filesystem timestamp
-// tick and skip a real rewrite. Their remote freshness stays
-// content-hash arbitrated, matching the pathRewriter carve-outs in
-// providerIncrementalIdentityChanged. Codebuff stays eligible
-// everywhere: its remote flow deliberately stamps the per-component
-// composite under the logical key (see
-// TestSyncCodebuffProviderStatHashRemoteStoresUnderLogicalKey).
+// ineligible: their remote freshness stays content-hash arbitrated,
+// matching the carve-outs in providerIncrementalIdentityChanged.
+// Codebuff stays eligible everywhere: its remote flow deliberately
+// stamps the per-component composite under the logical key.
 func (e *Engine) providerStatDigestEligible(agent parser.AgentType) bool {
-	if e.pathRewriter == nil {
-		return true
-	}
 	return agent != parser.AgentClaude && agent != parser.AgentEvener && !isCodexFormatAgent(agent)
 }
 
@@ -17670,14 +17668,14 @@ func (e *Engine) codexIndexRenamedRawIDs(ctx context.Context,
 	if e.codexStoredNameDiffers(ctx, uuid, title) {
 		rawIDs = append(rawIDs, uuid)
 	}
-	threadSessionID := e.idPrefix + "codex:" + uuid
+	threadSessionID := "codex:" + uuid
 	pageIDs, err := e.db.CodexRevertPageSessionIDs(ctx, threadSessionID)
 	if err != nil {
 		log.Printf("codex index rename: listing revert pages of %s: %v", threadSessionID, err)
 		return rawIDs
 	}
 	for _, id := range pageIDs {
-		raw := strings.TrimPrefix(id, e.idPrefix+"codex:")
+		raw := strings.TrimPrefix(id, "codex:")
 		if parser.CodexThreadIDFromSessionKey(raw) != uuid {
 			continue
 		}
@@ -19209,12 +19207,6 @@ func (e *Engine) prepareSessionNormalizedContext(
 	if err := e.applyRemoteRewritesContext(ctx, &s, msgs); err != nil {
 		return preparedSessionWrite{}, sessionWritePreserved, err
 	}
-	if e.archiveSessionPolicy != nil {
-		keep, err := e.archiveSessionPolicy(ctx, &s, pw.sess.ID)
-		if err != nil || !keep {
-			return preparedSessionWrite{}, sessionWritePreserved, err
-		}
-	}
 	applySourceCwdResolution(
 		&s, pw.sourceCwdResolution, pw.sourceCwdStored, pw.sourceCwdStoredOK,
 	)
@@ -19268,37 +19260,6 @@ func (e *Engine) prepareSessionNormalizedContext(
 	rows, err := ingest.FinalizeRows(ctx, candidate, options)
 	if err != nil {
 		return preparedSessionWrite{}, sessionWritePreserved, err
-	}
-	prepared := preparedSessionWrite{PreparedSession: rows, codexForkState: forkState, stagedToolKeys: stagedToolKeys}
-	if forkState != nil {
-		// Totals describe the sanitized message and independent event rows that
-		// will be committed. Session-summary events are not additive usage.
-		if err := ingest.ApplySessionTokenTotalsFromMessagesContext(ctx, &prepared.Session, prepared.Messages); err != nil {
-			return preparedSessionWrite{}, sessionWritePreserved, err
-		}
-		for _, event := range prepared.UsageEvents {
-			if event.Source == "session" {
-				continue
-			}
-			prepared.Session.TotalOutputTokens += event.OutputTokens
-			prepared.Session.HasTotalOutputTokens = prepared.Session.HasTotalOutputTokens || event.OutputTokens > 0
-			contextTokens := event.InputTokens + event.CacheCreationInputTokens + event.CacheReadInputTokens
-			prepared.Session.PeakContextTokens = max(prepared.Session.PeakContextTokens, contextTokens)
-			prepared.Session.HasPeakContextTokens = prepared.Session.HasPeakContextTokens || contextTokens > 0
-		}
-		for _, m := range prepared.Messages {
-			digest, keyErr := db.CodexForkMessageKey(m)
-			if keyErr != nil {
-				return preparedSessionWrite{}, sessionWritePreserved, keyErr
-			}
-			forkState.Messages[m.Ordinal].Digest = digest
-		}
-	}
-
-	if prepared.PlanUsage != nil {
-		prepared.PlanUsage.CountedUnder = applyIDPrefixToID(
-			e.idPrefix, prepared.PlanUsage.CountedUnder,
-		)
 	}
 	if candidate.Parsed.Session.Agent == parser.AgentCodexCloud {
 		if err := e.keepCodexCloudUsage(ctx, &prepared.PreparedSession); err != nil {
@@ -19734,28 +19695,6 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 			continue
 		}
 		s, msgs := prepared.Session, prepared.Messages
-		provenance, err := e.sessionArchiveProvenance(&s, pw.sess.ID)
-		if err != nil {
-			outcome.err = err
-			outcome.failedSessions++
-			return outcome
-		}
-		if pw.staged != nil && (provenance != nil || prepared.codexForkState != nil) {
-			err := e.writeAttachedStaged(ctx, prepared, pw, provenance)
-			if err != nil {
-				if isIntentionalSessionSkip(err) {
-					outcome.resolved[pendingIndex] = true
-					continue
-				}
-				outcome.err = errors.Join(outcome.err, err)
-				outcome.failedSessions++
-				continue
-			}
-			outcome.written[pendingIndex], outcome.resolved[pendingIndex] = true, true
-			outcome.writtenSessions++
-			outcome.writtenMessages += len(msgs)
-			continue
-		}
 		if pw.staged != nil {
 			// Staged streaming results bypass the bulk batch: their
 			// tool-result rows live in the staging scratch database and
@@ -22088,9 +22027,6 @@ func (e *Engine) processAndWriteSessionFile(
 			e.cacheSkip(res.skipCacheKey(path), res.mtime, res.sourceFingerprint)
 		}
 		return false, sessionsChanged, res.err
-	}
-	if err := e.validateSourceSessionOwnership(ctx, res); err != nil {
-		return false, sessionsChanged, err
 	}
 	if res.sourceCwdResolution.State != parser.SourceCwdUnspecified {
 		changed, reconcileErr := e.reconcileFilteredSourceCwd(ctx,

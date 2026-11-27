@@ -1,13 +1,14 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/config"
 )
 
 // deploymentArgs selects the image's command under AGENTSVIEW_MODE. It
-// prefixes serve or replica pg serve only when argv is empty or starts with a flag,
+// prefixes serve only when argv is empty or starts with a flag,
 // so explicit subcommands and root help/version requests stay unchanged.
 func deploymentArgs(args []string) ([]string, error) {
 	if len(args) > 0 {
@@ -24,8 +25,8 @@ func deploymentArgs(args []string) ([]string, error) {
 	if err != nil || !set {
 		return args, err
 	}
-	if mode == config.DeploymentModePGServe {
-		return append([]string{"replica", "pg", "serve"}, args...), nil
+	if mode != config.DeploymentModeServe {
+		return args, fmt.Errorf("unsupported AGENTSVIEW_MODE %q", mode)
 	}
 	return append([]string{"serve"}, args...), nil
 }

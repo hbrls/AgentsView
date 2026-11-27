@@ -2,7 +2,6 @@ package sync
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -628,77 +627,6 @@ func TestCodexEngineStagedSanitizesToolResultContent(t *testing.T) {
 // inserts straight from scratch storage and must apply the same prefix at
 // publish time, or a large remote Codex import would persist an unprefixed
 // native id that cannot resolve to the session it actually belongs to.
-func TestCodexEngineStagedSubagentEventIDPrefix(t *testing.T) {
-	const uuid = "019eb791-cf7d-75c1-8439-9ed74c122b13"
-	transcript := testjsonl.JoinJSONL(
-		testjsonl.CodexSessionMetaJSON(
-			uuid, "/workspace/project-a", "codex_cli_rs",
-			"2024-01-01T10:00:00Z",
-		),
-		testjsonl.CodexMsgJSON(
-			"user", "wait for the subagent", "2024-01-01T10:00:01Z",
-		),
-		testjsonl.CodexFunctionCallWithCallIDJSON(
-			"wait", "call_wait", map[string]any{
-				"ids": []string{"agent-1"},
-			}, "2024-01-01T10:00:02Z",
-		),
-		testjsonl.CodexFunctionCallOutputJSON(
-			"call_wait", map[string]any{
-				"status": map[string]any{
-					"agent-1": map[string]any{
-						"completed": "subagent finished",
-					},
-				},
-			}, "2024-01-01T10:00:03Z",
-		),
-	)
-
-	syncPrefixed := func(t *testing.T, stagedMin int64) *db.DB {
-		t.Helper()
-		database := openTestDB(t)
-		engine := NewEngine(t.Context(), database, EngineConfig{
-			AgentDirs: map[parser.AgentType][]string{
-				parser.AgentCodex: {writeCodexTranscriptRoot(t, uuid, transcript)},
-			},
-			Machine:                  "remote",
-			IDPrefix:                 "remote-host~",
-			StagedCodexParseMinBytes: stagedMin,
-		})
-		t.Cleanup(engine.Close)
-		stats := engine.SyncAll(t.Context(), nil)
-		require.Zero(t, stats.Failed)
-		require.Equal(t, 1, stats.Synced)
-		return database
-	}
-
-	legacyDB := syncPrefixed(t, 0)
-	stagedDB := syncPrefixed(t, 1)
-	sessionID := "remote-host~codex:" + uuid
-
-	assertPrefixed := func(t *testing.T, database *db.DB) db.ToolResultEvent {
-		t.Helper()
-		msgs, err := database.GetAllMessages(t.Context(), sessionID)
-		require.NoError(t, err)
-		var events []db.ToolResultEvent
-		for _, msg := range msgs {
-			for _, call := range msg.ToolCalls {
-				events = append(events, call.ResultEvents...)
-			}
-		}
-		require.Len(t, events, 1)
-		return events[0]
-	}
-
-	legacyEvent := assertPrefixed(t, legacyDB)
-	stagedEvent := assertPrefixed(t, stagedDB)
-	const wantSubagentID = "remote-host~codex:agent-1"
-	assert.Equal(t, wantSubagentID, legacyEvent.SubagentSessionID)
-	assert.Equal(t, wantSubagentID, stagedEvent.SubagentSessionID,
-		"staged publish must prefix the event's subagent session id "+
-			"the same way the collecting path's applyRemoteRewrites does")
-}
-
 // TestCodexEngineResyncBulkStagedParity pins the bulk-write blocker: a
 // full rebuild (ResyncAll) with the staged streaming path active must
 // publish real tool outputs, never the staged placeholders, and must
@@ -1152,7 +1080,7 @@ func TestCodexStagedStableSnapshotCountsMalformedTail(t *testing.T) {
 			database := openTestDB(t)
 			engine := NewEngine(t.Context(), database, EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}},
-				Machine:   "local", Ephemeral: true, StableSourceSnapshots: true,
+				Machine:   "local", Ephemeral: true,
 				StagedCodexParseMinBytes: threshold, DisableFilesystemProjectDiscovery: true,
 			})
 			t.Cleanup(engine.Close)
@@ -1166,64 +1094,3 @@ func TestCodexStagedStableSnapshotCountsMalformedTail(t *testing.T) {
 	}
 }
 
-func TestCodexStagedParseCancellation(t *testing.T) {
-	const uuid = "019eb791-cf7d-75c1-8439-9ed74c122d03"
-	fixture := testjsonl.NewSessionBuilder().AddCodexMeta("2026-07-10T07:00:00Z", uuid, "/workspace/project-a", "codex_cli_rs").AddCodexMessage("2026-07-10T07:00:01Z", "user", "run the command")
-	for i := range 3000 {
-		id := fmt.Sprintf("call_%d", i)
-		fixture.AddRaw(testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", id, nil, "2026-07-10T07:00:02Z"))
-		fixture.AddRaw(testjsonl.CodexFunctionCallOutputJSON(id, "command finished", "2026-07-10T07:00:03Z"))
-	}
-	root := writeCodexTranscriptRoot(t, uuid, fixture.String())
-	paths, err := filepath.Glob(filepath.Join(root, "2024", "01", "01", "*.jsonl"))
-	require.NoError(t, err)
-	require.Len(t, paths, 1)
-	info, err := os.Stat(paths[0])
-	require.NoError(t, err)
-	stage := t.TempDir()
-	engine := NewEngine(t.Context(), openTestDB(t), EngineConfig{
-		AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}},
-		Machine:   "local", Ephemeral: true, StagedCodexParseMinBytes: 1,
-		CodexStagingDir: stage, DisableFilesystemProjectDiscovery: true,
-	})
-	t.Cleanup(engine.Close)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	observed := make(chan bool, 1)
-	go func() {
-		ticker := time.NewTicker(time.Millisecond)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				observed <- false
-				return
-			case <-ticker.C:
-				entries, _ := os.ReadDir(stage)
-				for _, entry := range entries {
-					scratch, err := sql.Open("sqlite3", "file:"+filepath.Join(stage, entry.Name())+"?mode=ro")
-					if err != nil {
-						continue
-					}
-					var count int
-					err = scratch.QueryRowContext(ctx, "SELECT COUNT(*) FROM stage_events").Scan(&count)
-					_ = scratch.Close()
-					if err == nil && count > 0 {
-						cancel()
-						observed <- true
-						return
-					}
-				}
-			}
-		}
-	}()
-	result := engine.processFile(ctx, parser.DiscoveredFile{Agent: parser.AgentCodex, Path: paths[0], SourceSize: info.Size()})
-	defer result.releaseStaged()
-	defer result.retentionLease.Release()
-	cancel()
-	require.True(t, <-observed, "cancel after the parser stores its first result event")
-	require.ErrorIs(t, result.err, context.Canceled)
-	entries, err := os.ReadDir(stage)
-	require.NoError(t, err)
-	assert.Empty(t, entries, "cancellation releases scratch storage")
-}

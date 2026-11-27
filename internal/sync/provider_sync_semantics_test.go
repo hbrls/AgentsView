@@ -626,9 +626,8 @@ func TestOmnigentDependentSourceExpansionPreservesEngineIDPrefixing(
 		FilePath:        &childPath,
 	}))
 	engine := &Engine{
-		db:       database,
-		machine:  "local",
-		idPrefix: "remote~",
+		db:      database,
+		machine: "local",
 	}
 
 	expanded, err := engine.expandOmnigentInheritedMetadataSources(

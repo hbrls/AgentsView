@@ -50,7 +50,7 @@ func TestClaudeContinuationRetentionIncludesCompanion(t *testing.T) {
 	t.Cleanup(engine.Close)
 	for i, path := range paths {
 		result, used := engine.processProviderFile(t.Context(), parser.DiscoveredFile{
-			Path: path, Agent: parser.AgentClaude, SourceSize: sizes[i], ForceParse: true,
+			Path: path, Agent: parser.AgentClaude, ForceParse: true,
 		})
 		require.True(t, used)
 		require.NoError(t, result.err)

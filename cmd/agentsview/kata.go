@@ -14,7 +14,6 @@ import (
 
 	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/friction/filing"
 	"go.kenn.io/agentsview/internal/kata"
 	"go.kenn.io/agentsview/internal/server"
 )
@@ -119,8 +118,7 @@ func resolveKataStatus(cmd *cobra.Command) (kata.Status, error) {
 	if err := cfg.Kata.Validate(); err != nil {
 		return kata.Status{}, err
 	}
-	hub := filing.EligibleHost(false, cfg.HasPGPushTarget())
-	st, _ := kata.Probe(ctx, kata.ConfigFrom(cfg.Kata, hub))
+	st, _ := kata.Probe(ctx, kata.ConfigFrom(cfg.Kata, true))
 	return st, nil
 }
 

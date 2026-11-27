@@ -93,16 +93,6 @@ func newVerifiedSourceArchive(
 ) (*Engine, *verifiedSourceCountingProvider, []parser.DiscoveredFile) {
 	t.Helper()
 
-	return newVerifiedSourceArchiveWithRewriter(t, count, nil)
-}
-
-func newVerifiedSourceArchiveWithRewriter(
-	t *testing.T,
-	count int,
-	pathRewriter func(string) string,
-) (*Engine, *verifiedSourceCountingProvider, []parser.DiscoveredFile) {
-	t.Helper()
-
 	root := t.TempDir()
 	database := openTestDB(t)
 	provider := &verifiedSourceCountingProvider{
@@ -125,7 +115,6 @@ func newVerifiedSourceArchiveWithRewriter(
 			parser.AgentCodex: {root},
 		},
 		Machine:           "host",
-		PathRewriter:      pathRewriter,
 		ProviderFactories: []parser.ProviderFactory{factory},
 		ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
 			parser.AgentCodex: parser.ProviderMigrationProviderAuthoritative,
@@ -143,9 +132,6 @@ func newVerifiedSourceArchiveWithRewriter(
 		fingerprint, err := verifiedSourceFingerprint(path)
 		require.NoError(t, err)
 		filePath := path
-		if pathRewriter != nil {
-			filePath = pathRewriter(path)
-		}
 		fileSize := fingerprint.Size
 		fileMtime := fingerprint.MTimeNS
 		fileHash := fingerprint.Hash
@@ -474,19 +460,6 @@ func TestVerifiedSourceGateRechecksAfterStatAndWatcherInvalidation(t *testing.T)
 	assert.True(t, res.skip)
 	assert.Equal(t, 3, provider.fingerprintCalls,
 		"watcher overflow must clear every verified-source trust record")
-}
-
-func TestVerifiedSourceGateBypassesPathRewrittenSources(t *testing.T) {
-	rewriter := func(path string) string { return "remote:" + path }
-	engine, provider, files := newVerifiedSourceArchiveWithRewriter(
-		t, 1, rewriter,
-	)
-
-	runVerifiedSourcePass(t, engine, files)
-	runVerifiedSourcePass(t, engine, files)
-	assert.Equal(t, 2, provider.fingerprintCalls,
-		"remote materializations must deep-verify on every pass")
-	assert.Empty(t, engine.verifiedSources)
 }
 
 func TestVerifiedSourceGateLegacyClaudeRowMustEstablishFingerprint(t *testing.T) {

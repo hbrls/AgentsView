@@ -27,7 +27,6 @@ func TestCollectLiveActivityTargetsUsesOnlyConfiguredHintProviders(t *testing.T)
 				filepath.Join(base, "sessions"),
 				filepath.Join(base, "archived_sessions"),
 				filepath.Join(custom, "sessions"),
-				"s3://bucket/archive/sessions",
 			},
 			parser.AgentClaude: {filepath.Join(t.TempDir(), "claude")},
 		},

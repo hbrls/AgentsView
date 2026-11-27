@@ -183,7 +183,6 @@ func TestPreserveUnavailableSourceProjectsUsesDurableSnapshot(
 		parsedProject string
 		makeSource    bool
 		statErr       error
-		idPrefix      string
 		emptyMachine  bool
 	}{
 		{
@@ -198,11 +197,6 @@ func TestPreserveUnavailableSourceProjectsUsesDurableSnapshot(
 		{
 			name:       "empty parser project",
 			makeSource: true,
-		},
-		{
-			name:          "remote prefixed session",
-			parsedProject: "parser-fallback",
-			idPrefix:      "remote~",
 		},
 		{
 			name:          "empty legacy machine",
@@ -227,7 +221,7 @@ func TestPreserveUnavailableSourceProjectsUsesDurableSnapshot(
 			database := openTestDB(t)
 			root := filepath.Join(t.TempDir(), "checkout")
 			cwd := filepath.Join(root, "nested")
-			storedSessionID := applyIDPrefixToID(tc.idPrefix, sessionID)
+			storedSessionID := sessionID
 			if tc.makeSource {
 				require.NoError(t, os.MkdirAll(cwd, 0o755))
 			}
@@ -248,7 +242,7 @@ func TestPreserveUnavailableSourceProjectsUsesDurableSnapshot(
 				}, originalProject,
 			))
 			engine := NewEngine(t.Context(), database, EngineConfig{
-				Machine: machine, IDPrefix: tc.idPrefix,
+				Machine: machine,
 			})
 			t.Cleanup(engine.Close)
 			if tc.statErr != nil {
@@ -280,7 +274,7 @@ func TestPreserveUnavailableSourceProjectsHonorsDiscoveryPolicy(t *testing.T) {
 		t.Run(fmt.Sprintf("disabled=%t", disabled), func(t *testing.T) {
 			cwd := t.TempDir()
 			engine := NewEngine(t.Context(), openTestDB(t), EngineConfig{
-				Machine: "source-host", IDPrefix: "source-host~",
+				Machine:                           "source-host",
 				DisableFilesystemProjectDiscovery: disabled,
 			})
 			t.Cleanup(engine.Close)
@@ -425,7 +419,7 @@ func TestWriteBatchRelabelRecoversUnavailableSourceProject(t *testing.T) {
 		}, originalProject,
 	))
 	engine := NewEngine(t.Context(), database, EngineConfig{
-		Machine: storedMachine, IDPrefix: idPrefix,
+		Machine: storedMachine,
 	})
 	t.Cleanup(engine.Close)
 
@@ -2399,10 +2393,7 @@ func TestProviderForceReplaceRewritesResolvedMultiSessionHintScopes(t *testing.T
 		Def:       parser.AgentDef{Type: "scope-provider"},
 		container: container,
 	}
-	engine := &Engine{
-		db:           database,
-		pathRewriter: func(path string) string { return "host:" + path },
-	}
+	engine := &Engine{db: database}
 
 	ids, err := engine.providerSourceSessionIDsForForceReplace(
 		t.Context(), provider, parser.SourceRef{
@@ -3108,32 +3099,6 @@ func (spool *cancelOnLaterPageSpool) Page(
 	return spool.reconciliationSpoolStore.Page(ctx, cursor, limit)
 }
 
-func TestReconcileWatchRootsRemoteOnlyIncrementalScopeIsBoundedNoOp(t *testing.T) {
-	database := openTestDB(t)
-	localRoot := t.TempDir()
-	engine := NewEngine(t.Context(), database, EngineConfig{
-		AgentDirs: map[parser.AgentType][]string{
-			parser.AgentClaude: {localRoot, "s3://bucket/machine/claude"},
-		},
-		Machine: "local",
-	})
-	t.Cleanup(engine.Close)
-	engine.reconciliationSpoolFactory = func(context.Context, string) (reconciliationSpoolStore, error) {
-		require.FailNow(t, "remote-only incremental reconciliation enumerated local sources")
-		return nil, nil
-	}
-
-	err := engine.ReconcileWatchRoots(
-		t.Context(), []string{"s3://bucket/machine/claude"}, false,
-	)
-
-	require.NoError(t, err)
-	result := engine.LastReconciliationResult()
-	assert.True(t, result.Complete)
-	assert.False(t, result.Aborted)
-	assert.Equal(t, 1, result.Metrics.ExcludedRemoteRoots)
-}
-
 func TestReconcileWatchRootsAuthoritativeIOErrorsDoNotFalseTombstone(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -3730,72 +3695,6 @@ func TestReconcileWatchRootsPreservesHistoricalRowsUntilExactSourceObserved(
 	require.NoError(t, err)
 	assert.NotNil(t, observed,
 		"a source observed by the prior pass can be marked source-missing")
-}
-
-func TestReconciliationSourceBaselineUsesStoredPathRewrite(t *testing.T) {
-	database := openTestDB(t)
-	localPath := filepath.Join(t.TempDir(), "session.jsonl")
-	storedPath := "host:" + localPath
-	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
-		ID: "session", Project: "project", Machine: "host",
-		Agent: "claude", FilePath: &storedPath,
-	}))
-	engine := &Engine{
-		db: database, machine: "host",
-		pathRewriter: func(path string) string { return "host:" + path },
-	}
-
-	require.NoError(t, engine.baselineReconciliationCandidates(
-		t.Context(), []reconciliationCandidate{{
-			Provider: parser.AgentClaude, Identity: "session", Path: localPath,
-			Machine: "host",
-		}}, []machineSessionSource{{
-			Machine: "host",
-			Source:  db.SessionSourcePath{Agent: "claude", FilePath: storedPath},
-		}},
-		nil, nil,
-	))
-	changed, err := database.MarkSessionSourceMissing(
-		t.Context(), "host", "claude", "session", storedPath,
-	)
-	require.NoError(t, err)
-	assert.True(t, changed,
-		"the local candidate must baseline the path form stored by remote sync")
-}
-
-func TestTombstoneMissingWatchSourcesPreservesOneWayRewrittenOwnership(t *testing.T) {
-	database := openTestDB(t)
-	root := t.TempDir()
-	localPath := filepath.Join(root, "source", "session.jsonl")
-	storedPath := filepath.Join(root, "canonical", "session.jsonl")
-	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
-		ID: "remote~session", Project: "project", Machine: "remote",
-		Agent: string(parser.AgentClaude), FilePath: &storedPath,
-	}))
-	require.NoError(t, database.BaselineActiveSessionSourcePaths(
-		t.Context(), "remote", []db.SessionSourcePath{{
-			Agent: string(parser.AgentClaude), FilePath: storedPath,
-		}},
-	))
-	engine := withTestSources(&Engine{
-		db: database, machine: "remote",
-		pathRewriter: func(path string) string {
-			require.Equal(t, localPath, path)
-			return storedPath
-		},
-	}, &engineSources{
-		agentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}},
-	})
-
-	deleted, err := tombstoneMissingWatchSourcesUnderSyncLock(
-		t.Context(), engine, []string{root},
-	)
-	require.NoError(t, err)
-	assert.Zero(t, deleted,
-		"one-way path rewriting cannot authoritatively prove remote source loss")
-	stored, err := database.GetSession(t.Context(), "remote~session")
-	require.NoError(t, err)
-	assert.NotNil(t, stored)
 }
 
 func TestSyncPathsBaselinesPresentSourceBeforeLaterDelete(t *testing.T) {
@@ -5034,137 +4933,6 @@ func TestPairToolResultEventSummaries(t *testing.T) {
 	}
 }
 
-func TestApplyRemoteRewrites(t *testing.T) {
-	tests := []struct {
-		name         string
-		prefix       string
-		rewriter     func(string) string
-		sess         db.Session
-		msgs         []db.Message
-		wantSessID   string
-		wantParent   *string
-		wantFilePath *string
-		wantMsgSess  string // expected SessionID on messages
-		wantSubs     []string
-		wantEvSubs   []string
-	}{
-		{
-			name:   "no prefix is no-op",
-			prefix: "",
-			sess: db.Session{
-				ID: "abc",
-			},
-			msgs: []db.Message{
-				{SessionID: "abc"},
-			},
-			wantSessID:  "abc",
-			wantMsgSess: "abc",
-		},
-		{
-			name:   "all fields prefixed",
-			prefix: "host~",
-			sess: db.Session{
-				ID:              "abc",
-				ParentSessionID: strPtr("parent-1"),
-				FilePath:        strPtr("/tmp/file"),
-			},
-			msgs: []db.Message{
-				{
-					SessionID: "abc",
-					ToolCalls: []db.ToolCall{
-						{
-							SessionID:         "abc",
-							SubagentSessionID: "sub-1",
-							ResultEvents: []db.ToolResultEvent{
-								{SubagentSessionID: "ev-1"},
-								{SubagentSessionID: ""},
-							},
-						},
-						{SessionID: "abc"},
-					},
-				},
-			},
-			wantSessID:   "host~abc",
-			wantParent:   strPtr("host~parent-1"),
-			wantFilePath: strPtr("/tmp/file"),
-			wantMsgSess:  "host~abc",
-			wantSubs:     []string{"host~sub-1", ""},
-			wantEvSubs:   []string{"host~ev-1", ""},
-		},
-		{
-			name:   "path rewriter applied",
-			prefix: "box~",
-			rewriter: func(p string) string {
-				return "box:" + p
-			},
-			sess: db.Session{
-				ID:       "x",
-				FilePath: strPtr("/remote/path"),
-			},
-			msgs:         nil,
-			wantSessID:   "box~x",
-			wantFilePath: strPtr("box:/remote/path"),
-		},
-		{
-			name:   "nil parent stays nil",
-			prefix: "h~",
-			sess: db.Session{
-				ID: "z",
-			},
-			wantSessID: "h~z",
-			wantParent: nil,
-		},
-		{
-			name:   "empty parent stays empty",
-			prefix: "h~",
-			sess: db.Session{
-				ID:              "z",
-				ParentSessionID: strPtr(""),
-			},
-			wantSessID: "h~z",
-			wantParent: strPtr(""),
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			e := &Engine{
-				idPrefix:     tt.prefix,
-				pathRewriter: tt.rewriter,
-			}
-			e.applyRemoteRewrites(&tt.sess, tt.msgs)
-
-			assert.Equal(t, tt.wantSessID, tt.sess.ID)
-			diff := cmp.Diff(tt.wantParent, tt.sess.ParentSessionID)
-			assert.Empty(t, diff, "ParentSessionID %s", diff)
-			if tt.wantFilePath != nil {
-				diff := cmp.Diff(tt.wantFilePath, tt.sess.FilePath)
-				assert.Empty(t, diff, "FilePath %s", diff)
-			}
-			for _, m := range tt.msgs {
-				assert.Equal(t, tt.wantMsgSess, m.SessionID)
-			}
-			var gotSubs, gotEvSubs []string
-			for _, m := range tt.msgs {
-				for _, tc := range m.ToolCalls {
-					gotSubs = append(
-						gotSubs, tc.SubagentSessionID,
-					)
-					for _, ev := range tc.ResultEvents {
-						gotEvSubs = append(
-							gotEvSubs,
-							ev.SubagentSessionID,
-						)
-					}
-				}
-			}
-			diff = cmp.Diff(tt.wantSubs, gotSubs)
-			assert.Empty(t, diff, "SubagentSessionIDs %s", diff)
-			diff = cmp.Diff(tt.wantEvSubs, gotEvSubs)
-			assert.Empty(t, diff, "ResultEvent SubagentSessionIDs %s", diff)
-		})
-	}
-}
-
 func TestToDBUsageEventsStampsFinalSessionID(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -5261,56 +5029,6 @@ func TestToDBUsageEventsPreservesSessionSummaryTokenUpperBounds(t *testing.T) {
 	assert.Equal(t, 0, got[1].ReasoningTokens)
 }
 
-func TestWriteBatchRemoteIDPrefixUsageEvents(t *testing.T) {
-	database := openTestDB(t)
-	e := &Engine{db: database, idPrefix: "host~"}
-
-	ts := time.Unix(1700000000, 0).UTC()
-	pw := pendingWrite{
-		sess: parser.ParsedSession{
-			ID:           "antigravity:abc",
-			Project:      "proj",
-			Machine:      "host",
-			Agent:        parser.AgentAntigravity,
-			StartedAt:    ts,
-			EndedAt:      ts,
-			MessageCount: 1,
-		},
-		msgs: []parser.ParsedMessage{{
-			Role:      parser.RoleUser,
-			Content:   "hello",
-			Timestamp: ts,
-		}},
-		usageEvents: []parser.ParsedUsageEvent{{
-			// Parsers stamp the unprefixed session ID; the
-			// write path must replace it with the final
-			// remote-prefixed ID.
-			SessionID:    "antigravity:abc",
-			Source:       "generation",
-			Model:        "gemini",
-			InputTokens:  100,
-			OutputTokens: 50,
-			OccurredAt:   ts.Format(time.RFC3339Nano),
-		}},
-	}
-
-	written, _, failed, _ := e.writeBatch(
-		[]pendingWrite{pw}, syncWriteDefault, false,
-	)
-	require.Equal(t, 0, failed, "no session writes may fail")
-	require.Equal(t, 1, written)
-
-	events, err := database.GetUsageEvents(
-		t.Context(), "host~antigravity:abc",
-	)
-	require.NoError(t, err, "GetUsageEvents")
-	require.Len(t, events, 1)
-	assert.Equal(t, "host~antigravity:abc", events[0].SessionID)
-	assert.Equal(t, "gemini", events[0].Model)
-	assert.Equal(t, 100, events[0].InputTokens)
-	assert.Equal(t, 50, events[0].OutputTokens)
-}
-
 func TestDisabledSignalRecomputationSkipsEveryFullWritePath(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -5376,16 +5094,14 @@ func TestDisabledSignalRecomputationSkipsEveryFullWritePath(t *testing.T) {
 
 func TestWriteBatchBulkDemotesFailedDeclaredMember(t *testing.T) {
 	for _, tc := range []struct {
-		name     string
-		idPrefix string
+		name string
 	}{
 		{name: "local"},
-		{name: "remote prefixed", idPrefix: "m2_"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			database := openTestDB(t)
-			storedID := tc.idPrefix + "omnigent:failed"
-			controlID := tc.idPrefix + "semantic:control"
+			storedID := "omnigent:failed"
+			controlID := "semantic:control"
 			// Seed the session at the current data version, then fail its
 			// update: the demotion must mark the stored row stale, not
 			// leave it current.
@@ -5412,7 +5128,7 @@ func TestWriteBatchBulkDemotesFailedDeclaredMember(t *testing.T) {
 				END`, storedID, controlID))
 			require.NoError(t, err)
 
-			e := &Engine{db: database, idPrefix: tc.idPrefix}
+			e := &Engine{db: database}
 			container := filepath.Join(t.TempDir(), "chat.db")
 			makeWrite := func(
 				agent parser.AgentType, id string,
@@ -6735,39 +6451,6 @@ func TestProjectIdentityWriteBatchRejectsNonNativeWindowsDriveGitRemote(t *testi
 	assert.NotEmpty(t, observations[0].Key)
 }
 
-func TestProjectIdentityRemoteWriteSkipsLiveDiscovery(t *testing.T) {
-	database := openTestDB(t)
-	e := NewEngine(t.Context(), database, EngineConfig{
-		Machine:  "remote-host",
-		IDPrefix: "remote-host~",
-		PathRewriter: func(path string) string {
-			return "remote-host:" + path
-		},
-	})
-	written, _, failed, _ := e.writeBatch([]pendingWrite{{
-		sess: parser.ParsedSession{
-			ID:        "identity-remote",
-			Project:   "remote-project",
-			Machine:   "remote-host",
-			Agent:     parser.AgentCodex,
-			Cwd:       "remote-host:/srv/app",
-			StartedAt: time.Now(),
-		},
-	}}, syncWriteDefault, true)
-	require.Equal(t, 1, written)
-	require.Equal(t, 0, failed)
-
-	observations, err := database.ListProjectIdentityObservations(
-		t.Context(), []string{"remote-project"},
-	)
-	require.NoError(t, err)
-	require.Len(t, observations, 1)
-	assert.Equal(t, "remote-host:/srv/app", observations[0].RootPath)
-	assert.Empty(t, observations[0].GitRemote)
-	assert.Empty(t, observations[0].NormalizedRemote)
-	assert.Empty(t, observations[0].Key)
-}
-
 func TestProjectIdentityIncrementalAppendPersistsObservation(t *testing.T) {
 	database := openTestDB(t)
 	root := t.TempDir()
@@ -7113,51 +6796,6 @@ func TestProjectIdentityLegacyMappedSnapshotReparsesBeforeIncrementalAppend(
 	require.Len(t, snapshots, 1)
 	assert.Equal(t, sourceProject, snapshots[0].Project,
 		"the required full parse must replace fabricated mapped evidence")
-}
-
-func TestProjectIdentityIncrementalRemoteAppendSkipsLiveDiscovery(t *testing.T) {
-	database := openTestDB(t)
-	e := NewEngine(t.Context(), database, EngineConfig{
-		Machine:  "remote-host",
-		IDPrefix: "remote-host~",
-		PathRewriter: func(path string) string {
-			return "remote-host:" + path
-		},
-	})
-	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
-		ID:           "remote-host~inc-remote-identity",
-		Project:      "remote-inc",
-		Machine:      "remote-host",
-		Agent:        "codex",
-		Cwd:          "remote-host:/srv/app",
-		MessageCount: 1,
-	}))
-
-	err := e.writeIncremental(t.Context(), &incrementalUpdate{
-		sessionID: "remote-host~inc-remote-identity",
-		project:   "remote-inc",
-		machine:   "remote-host",
-		cwd:       "remote-host:/srv/app",
-		msgs: []parser.ParsedMessage{{
-			Role:    parser.RoleAssistant,
-			Content: "delta",
-			Ordinal: 1,
-		}},
-		msgCount:     2,
-		userMsgCount: 1,
-		fileSize:     100,
-		fileMtime:    time.Now().UnixNano(),
-	})
-	require.NoError(t, err)
-
-	observations, err := database.ListProjectIdentityObservations(
-		t.Context(), []string{"remote-inc"},
-	)
-	require.NoError(t, err)
-	require.Len(t, observations, 1)
-	assert.Equal(t, "remote-host:/srv/app", observations[0].RootPath)
-	assert.Empty(t, observations[0].GitRemote)
-	assert.Empty(t, observations[0].Key)
 }
 
 // TestWriteBatchAntigravityReplacesMessages covers a live Antigravity
@@ -7579,206 +7217,6 @@ func TestProcessAntigravityBrainOnlyUpdateNotSkipped(t *testing.T) {
 		"reparse must pick up the brain artifact message")
 }
 
-func TestShouldSkipFileWithIDPrefix(t *testing.T) {
-	database := openTestDB(t)
-
-	// Store a session with prefixed ID and file metadata.
-	sess := db.Session{
-		ID:       "host~abc-123",
-		Project:  "test",
-		Machine:  "host",
-		Agent:    "claude",
-		FilePath: strPtr("host:/remote/session.jsonl"),
-		FileSize: int64Ptr(1024),
-		FileMtime: int64Ptr(
-			int64(1700000000000000000),
-		),
-	}
-	require.NoError(t, database.UpsertSession(t.Context(), sess))
-	// data_version is no longer persisted by UpsertSession;
-	// stamp it explicitly so the skip check sees a current
-	// row.
-	require.NoError(t, database.SetSessionDataVersion(t.Context(),
-		sess.ID, db.CurrentDataVersion(),
-	))
-
-	// Engine with IDPrefix should find the session.
-	e := &Engine{
-		db:       database,
-		idPrefix: "host~",
-	}
-	got := e.shouldSkipFile(t.Context(),
-		"abc-123",
-		fakeFileInfo{size: 1024, mtime: 1700000000000000000},
-	)
-	assert.True(t, got, "shouldSkipFile should return true")
-
-	// Engine WITHOUT IDPrefix should NOT find it.
-	e2 := &Engine{db: database}
-	got2 := e2.shouldSkipFile(t.Context(),
-		"abc-123",
-		fakeFileInfo{size: 1024, mtime: 1700000000000000000},
-	)
-	assert.False(t, got2, "shouldSkipFile without prefix should return false")
-}
-
-func TestShouldSkipCodexReparsesStaleProject(t *testing.T) {
-	database := openTestDB(t)
-	path := filepath.Join(t.TempDir(), "rollout-2026-06-21T18-59-38-abc.jsonl")
-	require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0o600))
-	info, err := os.Stat(path)
-	require.NoError(t, err, "stat codex fixture")
-
-	sess := db.Session{
-		ID:        "host~codex:abc",
-		Project:   "roborev_ci_28293_3831737461",
-		Machine:   "host",
-		Agent:     "codex",
-		FilePath:  strPtr("host:" + path),
-		FileSize:  int64Ptr(info.Size()),
-		FileMtime: int64Ptr(info.ModTime().UnixNano()),
-	}
-	require.NoError(t, database.UpsertSession(t.Context(), sess))
-	require.NoError(t, database.SetSessionDataVersion(t.Context(),
-		sess.ID, db.CurrentDataVersion(),
-	))
-
-	e := &Engine{
-		db:       database,
-		idPrefix: "host~",
-		pathRewriter: func(path string) string {
-			return "host:" + path
-		},
-	}
-
-	assert.False(t, e.shouldSkipCodexFingerprint(t.Context(),
-		parser.AgentCodex, path, parser.SourceFingerprint{
-			Size:    info.Size(),
-			MTimeNS: info.ModTime().UnixNano(),
-		}, parser.ProviderSyncSemantics{}),
-		"stale generated roborev CI projects must be reparsed")
-}
-
-func TestProcessFileSkipCacheReparsesStaleCodexProject(t *testing.T) {
-	database := openTestDB(t)
-	root := t.TempDir()
-	path := filepath.Join(root, "rollout-2026-06-21T18-59-38-abc.jsonl")
-	content := testjsonl.JoinJSONL(
-		testjsonl.CodexSessionMetaJSON(
-			"abc",
-			"/home/roborev/.roborev/ci-worktrees/agentsview/roborev-ci-28293-3831737461",
-			"user",
-			"2024-01-01T10:00:00Z",
-		),
-		testjsonl.CodexMsgJSON("user", "review this", "2024-01-01T10:00:01Z"),
-	)
-	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
-	info, err := os.Stat(path)
-	require.NoError(t, err, "stat codex fixture")
-
-	sess := db.Session{
-		ID:        "host~codex:abc",
-		Project:   "roborev_ci_28293_3831737461",
-		Machine:   "host",
-		Agent:     "codex",
-		FilePath:  strPtr("host:" + path),
-		FileSize:  int64Ptr(info.Size()),
-		FileMtime: int64Ptr(info.ModTime().UnixNano()),
-	}
-	require.NoError(t, database.UpsertSession(t.Context(), sess))
-	require.NoError(t, database.SetSessionDataVersion(t.Context(),
-		sess.ID, db.CurrentDataVersion(),
-	))
-
-	e := withTestSources(&Engine{
-		db:        database,
-		idPrefix:  "host~",
-		skipCache: map[string]int64{path: info.ModTime().UnixNano()},
-		providerMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
-			parser.AgentCodex: parser.ProviderMigrationProviderAuthoritative,
-		},
-		pathRewriter: func(path string) string {
-			return "host:" + path
-		},
-	}, &engineSources{
-		agentDirs: map[parser.AgentType][]string{
-			parser.AgentCodex: {root},
-		},
-		providerFactories: providerFactoryMap(parser.ProviderFactories()),
-	})
-
-	res := e.processFile(t.Context(), parser.DiscoveredFile{
-		Agent:   parser.AgentCodex,
-		Path:    path,
-		Machine: "host",
-	})
-	require.NoError(t, res.err)
-	require.False(t, res.skip,
-		"remote skip cache must not hide stale generated roborev CI projects")
-	require.Len(t, res.results, 1)
-	assert.Equal(t, "agentsview", res.results[0].Session.Project)
-}
-
-func TestProcessFileSkipCacheReparsesStaleCodexDataVersion(t *testing.T) {
-	database := openTestDB(t)
-	root := t.TempDir()
-	path := filepath.Join(root, "rollout-2026-06-21T18-59-38-abc.jsonl")
-	content := testjsonl.JoinJSONL(
-		testjsonl.CodexSessionMetaJSON(
-			"abc",
-			"/home/user/code/agentsview",
-			"user",
-			"2024-01-01T10:00:00Z",
-		),
-		testjsonl.CodexMsgJSON("user", "review this", "2024-01-01T10:00:01Z"),
-	)
-	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
-	info, err := os.Stat(path)
-	require.NoError(t, err, "stat codex fixture")
-
-	sess := db.Session{
-		ID:        "host~codex:abc",
-		Project:   "agentsview",
-		Machine:   "host",
-		Agent:     "codex",
-		FilePath:  strPtr("host:" + path),
-		FileSize:  int64Ptr(info.Size()),
-		FileMtime: int64Ptr(info.ModTime().UnixNano()),
-	}
-	require.NoError(t, database.UpsertSession(t.Context(), sess))
-	require.NoError(t, database.SetSessionDataVersion(t.Context(),
-		sess.ID, db.CurrentDataVersion()-1,
-	))
-
-	e := withTestSources(&Engine{
-		db:        database,
-		idPrefix:  "host~",
-		skipCache: map[string]int64{path: info.ModTime().UnixNano()},
-		providerMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
-			parser.AgentCodex: parser.ProviderMigrationProviderAuthoritative,
-		},
-		pathRewriter: func(path string) string {
-			return "host:" + path
-		},
-	}, &engineSources{
-		agentDirs: map[parser.AgentType][]string{
-			parser.AgentCodex: {root},
-		},
-		providerFactories: providerFactoryMap(parser.ProviderFactories()),
-	})
-
-	res := e.processFile(t.Context(), parser.DiscoveredFile{
-		Agent: parser.AgentCodex,
-		Path:  path,
-	})
-	defer res.releaseStaged()
-	defer res.retentionLease.Release()
-	require.NoError(t, res.err)
-	require.False(t, res.skip,
-		"skip cache must not hide stale parser data versions")
-	require.Len(t, res.results, 1)
-}
-
 func TestSyncPathsCodexCachedFingerprintStillRefreshesChangedTitle(t *testing.T) {
 	database := openTestDB(t)
 	root := t.TempDir()
@@ -7862,9 +7300,8 @@ func cacheCodexProviderFingerprint(
 	factory, ok := engine.sources().providerFactories[parser.AgentCodex]
 	require.True(t, ok)
 	provider := factory.NewProvider(parser.ProviderConfig{
-		Roots:        engine.sources().agentDirs[parser.AgentCodex],
-		Machine:      engine.machine,
-		PathRewriter: engine.pathRewriter,
+		Roots:   engine.sources().agentDirs[parser.AgentCodex],
+		Machine: engine.machine,
 	})
 	file := parser.DiscoveredFile{Agent: parser.AgentCodex, Path: path}
 	source, found, err := engine.providerSourceForDiscoveredFile(
@@ -7923,158 +7360,6 @@ func TestSyncPathsCodexCachedFailureWithoutStoredSessionStaysSkipped(t *testing.
 		"cached failure remains applicable after the skipped pass")
 }
 
-func TestSyncPathsCodexCachedTitleRefreshUsesRewrittenDBPath(t *testing.T) {
-	database := openTestDB(t)
-	root := t.TempDir()
-	codexDir := filepath.Join(root, "sessions")
-	dayDir := filepath.Join(codexDir, "2024", "01", "01")
-	require.NoError(t, os.MkdirAll(dayDir, 0o755))
-
-	const uuid = "019eb791-cf7d-75c1-8439-9ed74c1229ef"
-	filename := "rollout-2024-01-01T10-00-00-" + uuid + ".jsonl"
-	path := filepath.Join(dayDir, filename)
-	logicalPath := "remote:/sessions/" + filename
-	content := testjsonl.JoinJSONL(
-		testjsonl.CodexSessionMetaJSON(
-			uuid, "/home/user/code/project-a", "codex_cli_rs",
-			"2024-01-01T10:00:00Z",
-		),
-		testjsonl.CodexMsgJSON(
-			"user", "preserve rewritten session", "2024-01-01T10:00:01Z",
-		),
-	)
-	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
-	indexPath := filepath.Join(root, parser.CodexSessionIndexFilename)
-	require.NoError(t, os.WriteFile(indexPath, []byte(
-		`{"id":"`+uuid+`","thread_name":"Original title"}`+"\n",
-	), 0o600))
-	transcriptTime := time.Now().Add(-2 * time.Hour).Truncate(time.Second)
-	indexTime := time.Now().Add(-time.Hour).Truncate(time.Second)
-	require.NoError(t, os.Chtimes(path, transcriptTime, transcriptTime))
-	require.NoError(t, os.Chtimes(indexPath, indexTime, indexTime))
-
-	engine := NewEngine(t.Context(), database, EngineConfig{
-		AgentDirs: map[parser.AgentType][]string{
-			parser.AgentCodex: {codexDir},
-		},
-		Machine:  "remote",
-		IDPrefix: "remote~",
-		PathRewriter: func(candidate string) string {
-			if filepath.Clean(candidate) == filepath.Clean(path) {
-				return logicalPath
-			}
-			return "remote:" + candidate
-		},
-	})
-	engine.SyncAll(t.Context(), nil)
-
-	const sessionID = "remote~codex:" + uuid
-	before, err := database.GetSessionFull(t.Context(), sessionID)
-	require.NoError(t, err)
-	require.NotNil(t, before)
-	require.NotNil(t, before.FilePath)
-	require.NotNil(t, before.FileMtime)
-	require.NotNil(t, before.SessionName)
-	assert.Equal(t, logicalPath, *before.FilePath)
-	assert.Equal(t, "Original title", *before.SessionName)
-	cacheKey, mtime := cacheCodexProviderFingerprint(t, engine, path)
-	engine.cacheSkip(cacheKey, mtime)
-	require.Equal(t, mtime, engine.SnapshotSkipCache()[cacheKey])
-
-	require.NoError(t, os.WriteFile(indexPath, []byte(
-		`{"id":"`+uuid+`","thread_name":"Renamed title"}`+"\n",
-	), 0o600))
-	storedMtime := time.Unix(0, *before.FileMtime)
-	require.NoError(t, os.Chtimes(indexPath, storedMtime, storedMtime))
-	indexInfo, err := os.Stat(indexPath)
-	require.NoError(t, err)
-	require.Equal(t, *before.FileMtime, indexInfo.ModTime().UnixNano())
-
-	engine.SyncPaths([]string{path})
-
-	after, err := database.GetSessionFull(t.Context(), sessionID)
-	require.NoError(t, err)
-	require.NotNil(t, after)
-	require.NotNil(t, after.SessionName)
-	require.NotNil(t, after.FilePath)
-	assert.Equal(t, "Renamed title", *after.SessionName)
-	assert.Equal(t, logicalPath, *after.FilePath)
-	assert.False(t, after.LastWriteIncremental)
-	msgs, err := database.GetAllMessages(t.Context(), sessionID)
-	require.NoError(t, err)
-	require.Len(t, msgs, 1)
-	assert.Equal(t, "preserve rewritten session", msgs[0].Content)
-}
-
-func TestProcessFileCodexDBFreshSkipIsNotCached(t *testing.T) {
-	database := openTestDB(t)
-	root := t.TempDir()
-	path := filepath.Join(root, "rollout-2026-06-21T18-59-38-abc.jsonl")
-	content := testjsonl.JoinJSONL(
-		testjsonl.CodexSessionMetaJSON(
-			"abc",
-			"/home/user/code/agentsview",
-			"user",
-			"2024-01-01T10:00:00Z",
-		),
-		testjsonl.CodexMsgJSON("user", "review this", "2024-01-01T10:00:01Z"),
-	)
-	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
-	info, err := os.Stat(path)
-	require.NoError(t, err, "stat codex fixture")
-	fileHash, err := ComputeFileHash(path)
-	require.NoError(t, err, "hash codex fixture")
-
-	sess := db.Session{
-		ID:        "host~codex:abc",
-		Project:   "agentsview",
-		Machine:   "host",
-		Agent:     "codex",
-		FilePath:  strPtr("host:" + path),
-		FileSize:  int64Ptr(info.Size()),
-		FileMtime: int64Ptr(info.ModTime().UnixNano()),
-		FileHash:  &fileHash,
-	}
-	require.NoError(t, database.UpsertSession(t.Context(), sess))
-	require.NoError(t, database.SetSessionDataVersion(t.Context(),
-		sess.ID, db.CurrentDataVersion(),
-	))
-
-	e := withTestSources(&Engine{
-		db:        database,
-		idPrefix:  "host~",
-		skipCache: map[string]int64{},
-		providerMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
-			parser.AgentCodex: parser.ProviderMigrationProviderAuthoritative,
-		},
-		pathRewriter: func(path string) string {
-			return "host:" + path
-		},
-	}, &engineSources{
-		agentDirs: map[parser.AgentType][]string{
-			parser.AgentCodex: {root},
-		},
-		providerFactories: providerFactoryMap(parser.ProviderFactories()),
-	})
-
-	// Missing optimization state must not force an unchanged remote source
-	// through a full parse. Preserve the database freshness skip without
-	// caching it, since remote sources must be content-verified again.
-	stats := e.SyncAll(t.Context(), nil)
-	require.Zero(t, stats.Failed)
-	require.Zero(t, stats.Synced)
-	_, cpOK, cpErr := database.GetParserCheckpoint(t.Context(), "host~codex:abc")
-	require.NoError(t, cpErr)
-	require.False(t, cpOK, "an unchanged source must not rebuild its checkpoint")
-
-	stats = e.SyncAll(t.Context(), nil)
-	require.Zero(t, stats.Failed)
-	require.Zero(t, stats.Synced,
-		"the second sync must skip the fresh session")
-	assert.Empty(t, e.SnapshotSkipCache(),
-		"the fresh skip must not be cached")
-}
-
 func TestClassifyCodexIndexPathSkipsMissingTranscript(t *testing.T) {
 	database := openTestDB(t)
 	root := t.TempDir()
@@ -8109,182 +7394,6 @@ func TestClassifyCodexIndexPathSkipsMissingTranscript(t *testing.T) {
 	files := engine.classifyCodexIndexPath(t.Context(), indexPath)
 
 	assert.Empty(t, files)
-}
-
-func TestProcessCodexAppendedStaleProjectDoesFullReparse(t *testing.T) {
-	database := openTestDB(t)
-	root := t.TempDir()
-	path := filepath.Join(root, "rollout-2026-06-21T18-59-38-abc.jsonl")
-	initial := testjsonl.JoinJSONL(
-		testjsonl.CodexSessionMetaJSON(
-			"abc",
-			"/home/roborev/.roborev/ci-worktrees/agentsview/roborev-ci-28293-3831737461",
-			"user",
-			"2024-01-01T10:00:00Z",
-		),
-		testjsonl.CodexMsgJSON("user", "review this", "2024-01-01T10:00:01Z"),
-	)
-	require.NoError(t, os.WriteFile(path, []byte(initial), 0o600))
-	info, err := os.Stat(path)
-	require.NoError(t, err, "stat initial codex fixture")
-
-	sess := db.Session{
-		ID:               "host~codex:abc",
-		Project:          "roborev_ci_28293_3831737461",
-		Machine:          "host",
-		Agent:            "codex",
-		FirstMessage:     strPtr("review this"),
-		MessageCount:     1,
-		UserMessageCount: 1,
-		FilePath:         strPtr("host:" + path),
-		FileSize:         int64Ptr(info.Size()),
-		FileMtime:        int64Ptr(info.ModTime().UnixNano()),
-		NextOrdinal:      1,
-	}
-	require.NoError(t, database.UpsertSession(t.Context(), sess))
-	require.NoError(t, database.SetSessionDataVersion(t.Context(),
-		sess.ID, db.CurrentDataVersion(),
-	))
-	require.NoError(t, database.InsertMessages(t.Context(), []db.Message{
-		{
-			SessionID: "host~codex:abc",
-			Ordinal:   0,
-			Role:      "user",
-			Content:   "review this",
-		},
-	}))
-
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
-	require.NoError(t, err, "open codex fixture for append")
-	_, err = f.WriteString(testjsonl.CodexMsgJSON(
-		"assistant", "done", "2024-01-01T10:00:02Z",
-	) + "\n")
-	require.NoError(t, err, "append codex fixture")
-	require.NoError(t, f.Close(), "close codex fixture")
-
-	e := withTestSources(&Engine{
-		db:       database,
-		idPrefix: "host~",
-		providerMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
-			parser.AgentCodex: parser.ProviderMigrationProviderAuthoritative,
-		},
-		pathRewriter: func(path string) string {
-			return "host:" + path
-		},
-	}, &engineSources{
-		agentDirs: map[parser.AgentType][]string{
-			parser.AgentCodex: {root},
-		},
-		providerFactories: providerFactoryMap(parser.ProviderFactories()),
-	})
-
-	res := e.processFile(t.Context(), parser.DiscoveredFile{
-		Agent: parser.AgentCodex,
-		Path:  path,
-	})
-	require.NoError(t, res.err)
-	require.Nil(t, res.incremental,
-		"stale project metadata must force full parse even when file appended")
-	require.Len(t, res.results, 1)
-	assert.Equal(t, "agentsview", res.results[0].Session.Project)
-}
-
-func TestProcessCodexAppendedStaleProjectCarriesForceReplace(t *testing.T) {
-	database := openTestDB(t)
-	root := t.TempDir()
-	path := filepath.Join(root, "rollout-2026-06-21T18-59-38-abc.jsonl")
-	initial := testjsonl.JoinJSONL(
-		testjsonl.CodexSessionMetaJSON(
-			"abc",
-			"/home/roborev/.roborev/ci-worktrees/agentsview/roborev-ci-28293-3831737461",
-			"user",
-			"2024-01-01T10:00:00Z",
-		),
-		testjsonl.CodexMsgJSON("user", "run command", "2024-01-01T10:00:01Z"),
-		testjsonl.CodexFunctionCallWithCallIDJSON(
-			"exec_command",
-			"call_cmd",
-			map[string]any{"cmd": "go test"},
-			"2024-01-01T10:00:02Z",
-		),
-	)
-	require.NoError(t, os.WriteFile(path, []byte(initial), 0o600))
-	info, err := os.Stat(path)
-	require.NoError(t, err, "stat initial codex fixture")
-
-	sess := db.Session{
-		ID:               "host~codex:abc",
-		Project:          "roborev_ci_28293_3831737461",
-		Machine:          "host",
-		Agent:            "codex",
-		FirstMessage:     strPtr("run command"),
-		MessageCount:     2,
-		UserMessageCount: 1,
-		FilePath:         strPtr("host:" + path),
-		FileSize:         int64Ptr(info.Size()),
-		FileMtime:        int64Ptr(info.ModTime().UnixNano()),
-		NextOrdinal:      2,
-	}
-	require.NoError(t, database.UpsertSession(t.Context(), sess))
-	require.NoError(t, database.SetSessionDataVersion(t.Context(),
-		sess.ID, db.CurrentDataVersion(),
-	))
-	require.NoError(t, database.InsertMessages(t.Context(), []db.Message{
-		{
-			SessionID: "host~codex:abc",
-			Ordinal:   0,
-			Role:      "user",
-			Content:   "run command",
-		},
-		{
-			SessionID: "host~codex:abc",
-			Ordinal:   1,
-			Role:      "assistant",
-			ToolCalls: []db.ToolCall{
-				{
-					ToolUseID: "call_cmd",
-					ToolName:  "exec_command",
-					InputJSON: `{"cmd":"go test"}`,
-				},
-			},
-		},
-	}))
-
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
-	require.NoError(t, err, "open codex fixture for append")
-	_, err = f.WriteString(testjsonl.CodexFunctionCallOutputJSON(
-		"call_cmd", `{"status":"ok"}`, "2024-01-01T10:00:03Z",
-	) + "\n")
-	require.NoError(t, err, "append codex fixture")
-	require.NoError(t, f.Close(), "close codex fixture")
-
-	e := withTestSources(&Engine{
-		db:       database,
-		idPrefix: "host~",
-		providerMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
-			parser.AgentCodex: parser.ProviderMigrationProviderAuthoritative,
-		},
-		pathRewriter: func(path string) string {
-			return "host:" + path
-		},
-	}, &engineSources{
-		agentDirs: map[parser.AgentType][]string{
-			parser.AgentCodex: {root},
-		},
-		providerFactories: providerFactoryMap(parser.ProviderFactories()),
-	})
-
-	res := e.processFile(t.Context(), parser.DiscoveredFile{
-		Agent: parser.AgentCodex,
-		Path:  path,
-	})
-	require.NoError(t, res.err)
-	require.Nil(t, res.incremental,
-		"stale project metadata must force full parse even when file appended")
-	require.Len(t, res.results, 1)
-	assert.Equal(t, "agentsview", res.results[0].Session.Project)
-	assert.True(t, res.forceReplace,
-		"fallback-triggering appended data must replace existing messages")
 }
 
 type incrementalRequestRecorder struct {
@@ -8434,118 +7543,6 @@ func (p *incrementalRequestRecorder) ParseIncremental(
 	}, parser.IncrementalApplied, nil
 }
 
-func TestTryProviderIncrementalAppendPassesPersistedSessionID(t *testing.T) {
-	database := openTestDB(t)
-	root := t.TempDir()
-	path := filepath.Join(
-		root, "rollout-2024-01-01T00-00-00-abc.jsonl",
-	)
-	require.NoError(t, os.WriteFile(path, []byte("{}\n{}\n"), 0o600))
-	info, err := os.Stat(path)
-	require.NoError(t, err)
-
-	const persistedID = "remote~codex:abc"
-	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
-		ID:               persistedID,
-		Project:          "project",
-		Machine:          "remote",
-		Agent:            string(parser.AgentCodex),
-		FirstMessage:     strPtr("hello"),
-		MessageCount:     1,
-		UserMessageCount: 1,
-		FilePath:         strPtr(path),
-		FileSize:         int64Ptr(3),
-		FileMtime:        int64Ptr(info.ModTime().UnixNano()),
-		NextOrdinal:      1,
-	}))
-	require.NoError(t, database.SetSessionDataVersion(t.Context(),
-		persistedID, db.CurrentDataVersion(),
-	))
-	require.NoError(t, database.InsertMessages(t.Context(), []db.Message{{
-		SessionID: persistedID,
-		Ordinal:   0,
-		Role:      "user",
-		Content:   "hello",
-	}}))
-
-	provider := &incrementalRequestRecorder{
-		Def: parser.AgentDef{
-			Type:     parser.AgentCodex,
-			IDPrefix: "codex:",
-		},
-		Caps: parser.Capabilities{Source: parser.SourceCapabilities{
-			IncrementalAppend: parser.CapabilitySupported,
-		}},
-	}
-	e := &Engine{
-		db:       database,
-		idPrefix: "remote~",
-	}
-	source := parser.SourceRef{
-		Provider:       parser.AgentCodex,
-		DisplayPath:    path,
-		FingerprintKey: path,
-	}
-	result, applied := e.tryProviderIncrementalAppend(
-		t.Context(),
-		provider,
-		source,
-		parser.DiscoveredFile{Agent: parser.AgentCodex, Path: path},
-		parser.SourceFingerprint{
-			Key:     path,
-			Size:    info.Size(),
-			MTimeNS: info.ModTime().UnixNano(),
-		},
-		nil, "", nil, nil,
-	)
-
-	require.True(t, applied)
-	require.NotNil(t, result.incremental)
-	assert.Equal(t, persistedID, provider.request.SessionID,
-		"provider continuation identity must come from the persisted row")
-	assert.Equal(t, persistedID, result.incremental.sessionID)
-}
-
-func TestCollectAndBatchPrefixesParserExcludedIDs(t *testing.T) {
-	database := openTestDB(t)
-	ctx := t.Context()
-
-	raw := db.Session{
-		ID:      "probe",
-		Project: "local",
-		Machine: "local",
-		Agent:   "claude",
-	}
-	prefixed := db.Session{
-		ID:      "host~probe",
-		Project: "remote",
-		Machine: "host",
-		Agent:   "claude",
-	}
-	require.NoError(t, database.UpsertSession(ctx, raw))
-	require.NoError(t, database.UpsertSession(ctx, prefixed))
-
-	results := make(chan syncJob, 1)
-	results <- syncJob{
-		excludedSessionIDs: []string{"probe"},
-		path:               "/remote/probe.jsonl",
-	}
-	close(results)
-
-	e := &Engine{db: database, idPrefix: "host~"}
-	stats := e.collectAndBatch(
-		ctx, results, 1, 1, nil, syncWriteDefault,
-	)
-
-	assert.Equal(t, []string{"host~probe"}, stats.parserExcludedIDs)
-	gotRaw, err := database.GetSession(ctx, "probe")
-	require.NoError(t, err, "raw local session lookup")
-	assert.NotNil(t, gotRaw, "raw local session must not be deleted")
-	gotPrefixed, err := database.GetSession(ctx, "host~probe")
-	require.NoError(t, err, "prefixed remote session lookup")
-	assert.Nil(t, gotPrefixed, "prefixed remote session should be deleted")
-}
-
 func TestCollectAndBatchClearsDanglingParentAfterParserExclusion(t *testing.T) {
 	database := openTestDB(t)
 	parentID := "excluded-spawner"
@@ -8656,50 +7653,6 @@ func TestCollectAndBatchCompletesPostWriteLinksAfterCancellation(t *testing.T) {
 		"SELECT count(*) FROM subagent_parent_repair_queue",
 	).Scan(&queued))
 	assert.Zero(t, queued)
-}
-
-func TestShouldSkipByPathWithRewriter(t *testing.T) {
-	database := openTestDB(t)
-
-	// Store a session with rewritten file path.
-	sess := db.Session{
-		ID:       "host~codex:abc",
-		Project:  "test",
-		Machine:  "host",
-		Agent:    "codex",
-		FilePath: strPtr("host:/remote/codex/abc.jsonl"),
-		FileSize: int64Ptr(2048),
-		FileMtime: int64Ptr(
-			int64(1700000000000000000),
-		),
-	}
-	require.NoError(t, database.UpsertSession(t.Context(), sess))
-	require.NoError(t, database.SetSessionDataVersion(t.Context(),
-		sess.ID, db.CurrentDataVersion(),
-	))
-
-	rewriter := func(p string) string {
-		return "host:" + p
-	}
-
-	// Engine with PathRewriter should find the session.
-	e := &Engine{
-		db:           database,
-		pathRewriter: rewriter,
-	}
-	got := e.shouldSkipByPath(t.Context(),
-		"/remote/codex/abc.jsonl",
-		fakeFileInfo{size: 2048, mtime: 1700000000000000000},
-	)
-	assert.True(t, got, "shouldSkipByPath should return true")
-
-	// Without rewriter, lookup misses.
-	e2 := &Engine{db: database}
-	got2 := e2.shouldSkipByPath(t.Context(),
-		"/remote/codex/abc.jsonl",
-		fakeFileInfo{size: 2048, mtime: 1700000000000000000},
-	)
-	assert.False(t, got2, "shouldSkipByPath without rewriter should return false")
 }
 
 // writeAiderHistory writes a two-content-run plus one header-only-run
@@ -9951,20 +8904,6 @@ func TestEngine_CoordinatedSyncClearsProgressBeforePostSyncWork(t *testing.T) {
 				return err
 			},
 		},
-		{
-			name: "sync then run with rebuild",
-			run: func(engine *Engine, work func() error) error {
-				_, err := engine.SyncThenRunWithRebuild(
-					t.Context(), false, nil,
-					func() (RebuildOptions, RebuildCleanup, error) {
-						return RebuildOptions{}, nil, nil
-					},
-					nil,
-					func(bool, bool) error { return work() },
-				)
-				return err
-			},
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -10038,14 +8977,6 @@ func TestEngine_ZeroSyncedSuccessfulResyncEmits(t *testing.T) {
 			},
 		},
 		{
-			name: "direct resync with options",
-			run: func(_ *testing.T, engine *Engine) (SyncStats, error) {
-				return engine.ResyncAllWithOptions(
-					t.Context(), nil, RebuildOptions{},
-				)
-			},
-		},
-		{
 			name: "coordinated full sync",
 			run: func(t *testing.T, engine *Engine) (SyncStats, error) {
 				t.Helper()
@@ -10054,25 +8985,6 @@ func TestEngine_ZeroSyncedSuccessfulResyncEmits(t *testing.T) {
 					t.Context(), true, nil,
 					func(forceFull bool) error {
 						assert.True(t, forceFull)
-						return nil
-					},
-				)
-			},
-		},
-		{
-			name: "coordinated full rebuild",
-			run: func(t *testing.T, engine *Engine) (SyncStats, error) {
-				t.Helper()
-
-				return engine.SyncThenRunWithRebuild(
-					t.Context(), true, nil,
-					func() (RebuildOptions, RebuildCleanup, error) {
-						return RebuildOptions{}, nil, nil
-					},
-					nil,
-					func(forceFull, rebuilt bool) error {
-						assert.True(t, forceFull)
-						assert.True(t, rebuilt)
 						return nil
 					},
 				)
@@ -10104,62 +9016,8 @@ func TestEngine_ZeroSyncedSuccessfulResyncEmits(t *testing.T) {
 	}
 }
 
-type recordingRebuildCommitter struct {
-	events    *[]string
-	commitErr error
-}
 
-func (c *recordingRebuildCommitter) Commit() error {
-	*c.events = append(*c.events, "commit")
-	return c.commitErr
-}
 
-func (c *recordingRebuildCommitter) Close() error {
-	*c.events = append(*c.events, "close")
-	return nil
-}
-
-func TestRebuildCommitRunsAfterSwapBeforePostRebuildWork(t *testing.T) {
-	fx := newEngineFixture(t)
-	var events []string
-	cleanup := &recordingRebuildCommitter{events: &events}
-
-	stats, err := fx.engine.SyncThenRunWithRebuild(
-		t.Context(), true, nil,
-		func() (RebuildOptions, RebuildCleanup, error) {
-			return RebuildOptions{}, cleanup, nil
-		},
-		func(SyncStats, error) { events = append(events, "done") },
-		func(bool, bool) error {
-			events = append(events, "work")
-			return nil
-		},
-	)
-	require.NoError(t, err)
-	assert.False(t, stats.Aborted)
-	assert.Equal(t, []string{"commit", "done", "work", "close"}, events)
-}
-
-func TestRebuildCommitFailurePreventsPostRebuildWork(t *testing.T) {
-	fx := newEngineFixture(t)
-	var events []string
-	sentinel := errors.New("commit sentinel")
-	cleanup := &recordingRebuildCommitter{events: &events, commitErr: sentinel}
-
-	_, err := fx.engine.SyncThenRunWithRebuild(
-		t.Context(), true, nil,
-		func() (RebuildOptions, RebuildCleanup, error) {
-			return RebuildOptions{}, cleanup, nil
-		},
-		func(SyncStats, error) { events = append(events, "done") },
-		func(bool, bool) error {
-			events = append(events, "work")
-			return nil
-		},
-	)
-	require.ErrorIs(t, err, sentinel)
-	assert.Equal(t, []string{"commit", "done", "close"}, events)
-}
 
 func TestEngine_SyncPathsEmitsWhenSessionsChange(t *testing.T) {
 	fx := newEngineFixture(t)
@@ -11828,13 +10686,7 @@ func seedCodexRenameCase(t *testing.T, database *db.DB) codexRenameFixture {
 		sess.ID, db.CurrentDataVersion(),
 	))
 
-	e := &Engine{
-		db:       database,
-		idPrefix: "host~",
-		pathRewriter: func(p string) string {
-			return "host:" + p
-		},
-	}
+	e := &Engine{db: database}
 	return codexRenameFixture{
 		e: e, path: path, info: info,
 		effectiveMtime: effectiveMtime, root: root, uuid: uuid,

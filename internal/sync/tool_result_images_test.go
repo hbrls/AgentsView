@@ -407,7 +407,7 @@ func TestReadOnlyResyncReplacementCarriesImagePolicy(t *testing.T) {
 				return database.ReplaceSessionMessages(t.Context(), "keep0", messages)
 			}
 			stats, err := resyncEngine.resyncBuildLocked(
-				t.Context(), nil, RebuildOptions{}, operations, false,
+				t.Context(), nil, operations,
 			)
 			require.NoError(t, err)
 			assert.False(t, stats.Aborted)

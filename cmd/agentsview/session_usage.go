@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
@@ -332,28 +331,6 @@ func httpSessionUsageData(
 	return out, usageExitCode(out), nil
 }
 
-func httpSessionSyncStatus(
-	ctx context.Context, baseURL, token string,
-) (startupPending, archiveStale, syncPending bool, err error) {
-	api, err := apiclient.NewHTTPClient(baseURL, token, sessionUsageHTTPClient)
-	if err != nil {
-		return false, false, false, err
-	}
-	response, err := api.GetAPIV1SyncStatusWithResponse(ctx)
-	if err != nil {
-		return false, false, false, err
-	}
-	if response == nil {
-		return false, false, false, io.ErrUnexpectedEOF
-	}
-	if response.JSON200 == nil {
-		return false, false, false, fmt.Errorf(
-			"sync status: HTTP %d: %s", response.StatusCode, response.Body,
-		)
-	}
-	return response.JSON200.StartupPending, response.JSON200.ArchiveStale, response.JSON200.SyncPending, nil
-}
-
 func storeSessionUsageData(
 	ctx context.Context,
 	storeName string,
@@ -362,8 +339,8 @@ func storeSessionUsageData(
 	query sessionUsageQuery,
 ) (*sessionUsageOutput, int, error) {
 	if len(cfg.CustomModelPricing) > 0 {
-		if priced, ok := store.(customPricingStore); ok {
-			priced.SetCustomPricing(cfg.CustomModelPricing)
+		if database, ok := store.(*db.DB); ok {
+			database.SetCustomPricing(cfg.CustomModelPricing)
 		}
 	}
 

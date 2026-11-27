@@ -191,52 +191,6 @@ func TestResolveActivityReport_JSONShape(t *testing.T) {
 	assert.Equal(t, "2026-06-16T00:00:00Z", r.RangeStart)
 }
 
-func TestActivityReport_UsesDiscoveredDaemon(t *testing.T) {
-	dataDir := testDataDir(t)
-
-	var gotQuery url.Values
-	ts := daemonRouteTestServer(t, map[string]http.HandlerFunc{
-		"/api/v1/activity/report": func(w http.ResponseWriter, r *http.Request) {
-			gotQuery = r.URL.Query()
-			writeJSONResponse(w, `{
-				"timezone":"UTC",
-				"range_start":"2026-06-16T00:00:00Z",
-				"range_end":"2026-06-17T00:00:00Z",
-				"bucket_unit":"1h",
-				"bucket_seconds":3600,
-				"bucket_count":24,
-				"effective_end":"2026-06-17T00:00:00Z",
-				"elapsed_bucket_count":24,
-				"buckets":[],
-				"peak":{"agents":0},
-				"totals":{"sessions":3},
-				"by_project":[],
-				"by_model":[],
-				"by_agent":[],
-				"by_session":[],
-				"intervals":[]
-			}`)
-		},
-	})
-	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
-
-	out := captureStdout(t, func() {
-		runActivityReport(t.Context(), ActivityReportConfig{
-			JSON: true, Preset: "day",
-			Date: "2026-06-16", Timezone: "UTC",
-		})
-	})
-	assert.Equal(t, "day", gotQuery.Get("preset"))
-	assert.Equal(t, "2026-06-16", gotQuery.Get("date"))
-	assert.Equal(t, "UTC", gotQuery.Get("timezone"))
-
-	var payload activity.Report
-	require.NoError(t, json.Unmarshal([]byte(out), &payload))
-	assert.Equal(t, "UTC", payload.Timezone)
-	assert.Equal(t, 3, payload.Totals.Sessions)
-	assert.NoFileExists(t, filepath.Join(dataDir, "sessions.db"))
-}
-
 func TestFetchHTTPActivityReportContinuesRequestedGeneration(t *testing.T) {
 	reportRequests := 0
 	mux := http.NewServeMux()
@@ -287,82 +241,6 @@ func TestFetchHTTPActivityReportContinuesRequestedGeneration(t *testing.T) {
 	assert.Equal(t, "original-report", report.ReportID)
 	require.Len(t, report.BySession, 1)
 	assert.Equal(t, "continued", report.BySession[0].SessionID)
-}
-
-func TestActivityReportCommandCursorInheritsNonDefaultPagingFlags(t *testing.T) {
-	dataDir := testDataDir(t)
-	queries := make(chan url.Values, 2)
-	pageResponse := func(sessionID, nextCursor string) string {
-		report := activity.Report{
-			ReportID: "saved-report", Timezone: "UTC",
-			BySession:     []activity.SessionRow{{SessionID: sessionID}},
-			SessionsTotal: 2, SessionsNextCursor: nextCursor,
-		}
-		payload, err := json.Marshal(map[string]any{
-			"report_id": "saved-report", "sessions": report.BySession,
-			"next_cursor": nextCursor, "total": 2, "report": report,
-		})
-		require.NoError(t, err)
-		return string(payload)
-	}
-	firstPage := pageResponse("first", "project-ascending-cursor")
-	secondPage := pageResponse("second", "")
-	ts := daemonRouteTestServer(t, map[string]http.HandlerFunc{
-		"/api/v1/activity/report/saved-report/sessions": func(
-			w http.ResponseWriter, r *http.Request,
-		) {
-			query := r.URL.Query()
-			queries <- query
-			response := secondPage
-			if query.Get("cursor") == "" {
-				response = firstPage
-			}
-			writeJSONResponse(w, response)
-		},
-	})
-	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
-
-	firstCommand := newRootCommand()
-	firstCommand.SetArgs([]string{
-		"activity", "report", "--json", "--sessions-report-id", "saved-report",
-		"--sessions-sort", "project", "--sessions-direction", "asc",
-		"--sessions-bucket-start", "2", "--sessions-bucket-end", "4",
-	})
-	var firstErr error
-	firstOutput := captureStdout(t, func() {
-		_, firstErr = firstCommand.ExecuteC()
-	})
-	require.NoError(t, firstErr)
-	var first activity.Report
-	require.NoError(t, json.Unmarshal([]byte(firstOutput), &first))
-	require.Equal(t, "project-ascending-cursor", first.SessionsNextCursor)
-
-	secondCommand := newRootCommand()
-	secondCommand.SetArgs([]string{
-		"activity", "report", "--json", "--sessions-report-id", "saved-report",
-		"--sessions-cursor", first.SessionsNextCursor,
-	})
-	var secondErr error
-	secondOutput := captureStdout(t, func() {
-		_, secondErr = secondCommand.ExecuteC()
-	})
-	require.NoError(t, secondErr)
-	var second activity.Report
-	require.NoError(t, json.Unmarshal([]byte(secondOutput), &second))
-	require.Len(t, second.BySession, 1)
-	assert.Equal(t, "second", second.BySession[0].SessionID)
-
-	firstQuery := <-queries
-	assert.Equal(t, "project", firstQuery.Get("sort"))
-	assert.Equal(t, "asc", firstQuery.Get("direction"))
-	assert.Equal(t, "2", firstQuery.Get("bucket_start"))
-	assert.Equal(t, "4", firstQuery.Get("bucket_end"))
-	secondQuery := <-queries
-	assert.Equal(t, "project-ascending-cursor", secondQuery.Get("cursor"))
-	assert.False(t, secondQuery.Has("sort"))
-	assert.False(t, secondQuery.Has("direction"))
-	assert.False(t, secondQuery.Has("bucket_start"))
-	assert.False(t, secondQuery.Has("bucket_end"))
 }
 
 // mustLocation loads a named time zone, failing the test if it is unavailable.

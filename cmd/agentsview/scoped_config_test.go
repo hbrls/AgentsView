@@ -91,8 +91,6 @@ func TestScopedConfigExportIgnoresUnusedSections(t *testing.T) {
 		{"daemon_idle_timeout", "daemon_idle_timeout = '-1s'\n"},
 		{"chart_palette", "chart_palette = 'invalid'\n"},
 		{"zoom_level", "zoom_level = 12\n"},
-		{"pg", "[pg.all]\nurl = 'postgres://db.example/archive'\n"},
-		{"clickhouse", "[clickhouse.all]\nurl = 'clickhouse://db.example/archive'\n"},
 	} {
 		t.Run(tt.section, func(t *testing.T) {
 			seedScopedConfigArchive(t)
@@ -120,7 +118,6 @@ func TestScopedConfigDeploymentOnlyAffectsServer(t *testing.T) {
 		env              []string
 	}{
 		{"missing token file", "", "AGENTSVIEW_AUTH_TOKEN_FILE", []string{"AGENTSVIEW_MODE=serve", "AGENTSVIEW_AUTH_TOKEN_FILE=/nonexistent/scoped-config-token"}},
-		{"embeddings conflict", "[vector]\nenabled = false\n", "AGENTSVIEW_EMBEDDINGS_*", []string{"AGENTSVIEW_MODE=serve", "AGENTSVIEW_EMBEDDINGS_ENDPOINT=http://127.0.0.1:30000/v1"}},
 		{"invalid mode", "", "AGENTSVIEW_MODE", []string{"AGENTSVIEW_MODE=invalid"}},
 		{"invalid server boolean", "", "AGENTSVIEW_REQUIRE_AUTH", []string{"AGENTSVIEW_MODE=serve", "AGENTSVIEW_REQUIRE_AUTH=invalid"}},
 	} {
@@ -138,7 +135,7 @@ func TestScopedConfigDeploymentOnlyAffectsServer(t *testing.T) {
 }
 
 func TestScopedConfigParseErrorsAreGlobal(t *testing.T) {
-	for _, data := range []string{"[insights\n", "[vector]\nunknown_key = true\n", "[pg]\nunknown_key = true\n"} {
+	for _, data := range []string{"[insights\n", "[vector]\nunknown_key = true\n"} {
 		t.Run(data, func(t *testing.T) {
 			seedScopedConfigArchive(t)
 			require.NoError(t, os.WriteFile(filepath.Join(os.Getenv("AGENTSVIEW_DATA_DIR"), "config.toml"), []byte(data), 0o600))
@@ -345,9 +342,6 @@ func TestScopedConfigReplacementRejectsInvalidServerConfigBeforeStop(t *testing.
 		{"insights", "[insights]\nmodel='incomplete'\n", "endpoint and model", nil},
 		{"vector", "[vector]\nenabled=true\n[vector.embeddings.servers]\n", "model is required", nil},
 		{"palette", "chart_palette='invalid'\n", "chart_palette", nil},
-		{"deployment embeddings", "[vector]\nenabled=false\n", "AGENTSVIEW_EMBEDDINGS_*", map[string]string{
-			"AGENTSVIEW_MODE": "serve", "AGENTSVIEW_EMBEDDINGS_ENDPOINT": "http://127.0.0.1:30000/v1",
-		}},
 		{"deployment mode", "", "AGENTSVIEW_MODE must", map[string]string{"AGENTSVIEW_MODE": "invalid"}},
 		{"deployment bind", "", "exposes the API beyond", map[string]string{
 			"AGENTSVIEW_MODE": "serve", "AGENTSVIEW_HOST": "0.0.0.0", "AGENTSVIEW_REQUIRE_AUTH": "false",

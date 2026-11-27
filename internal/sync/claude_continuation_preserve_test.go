@@ -118,8 +118,7 @@ func TestClaudeContinuationMissingSourcePreservesArchive(t *testing.T) {
 			// Two rebuilds prove preservation also copies source ownership.
 			for range 2 {
 				if tc.rebuild {
-					stats, err := engine.ResyncAllWithOptions(t.Context(), nil, RebuildOptions{})
-					require.NoError(t, err)
+					stats := engine.ResyncAll(t.Context(), nil)
 					require.Zero(t, stats.Failed)
 				} else {
 					stats := engine.SyncAllForceParse(t.Context(), nil)

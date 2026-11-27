@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -94,65 +93,6 @@ func TestOpenClawUnchangedSourcesSkipStoredRankLookup(t *testing.T) {
 					assert.True(t, result.skip)
 				}
 				assert.Zero(t, lookups, "unchanged sources must not resolve the stored source again")
-			}
-		})
-	}
-}
-
-func TestStoredSourceRankUsesPhysicalPathsWhenAvailable(t *testing.T) {
-	root := t.TempDir()
-	other := t.TempDir()
-	stored := writeSourceRankOpenClawSession(t, root, "duplicate", "preferred question")
-	candidatePath := writeSourceRankOpenClawSession(t, other, "duplicate", "older question")
-	newer := time.Date(2026, 9, 22, 10, 0, 0, 0, time.UTC)
-	older := newer.Add(-time.Hour)
-	require.NoError(t, os.Chtimes(stored, newer, newer))
-	require.NoError(t, os.Chtimes(candidatePath, older, older))
-	provider, ok := parser.NewProvider(parser.AgentOpenClaw, parser.ProviderConfig{Roots: []string{root, other}})
-	require.True(t, ok)
-	candidate, found, err := provider.FindSource(t.Context(), parser.FindSourceRequest{
-		StoredFilePath: candidatePath, PreferStoredSource: true,
-	})
-	require.NoError(t, err)
-	require.True(t, found)
-	for _, tc := range []struct {
-		name       string
-		remote     bool
-		resolver   bool
-		mappedPath string
-		wantRanked bool
-		wantCalls  int
-	}{
-		{name: "local resolver is unused", resolver: true, wantRanked: true},
-		{name: "remote without resolver", remote: true},
-		{name: "remote missing mapping", remote: true, resolver: true, wantCalls: 1},
-		{name: "remote mapped", remote: true, resolver: true, mappedPath: stored, wantRanked: true, wantCalls: 1},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			engine := &Engine{}
-			storedPath := stored
-			if tc.remote {
-				engine.pathRewriter = func(string) string { return "host:/sessions/duplicate.jsonl" }
-				storedPath = "host:/sessions/duplicate.jsonl"
-			}
-			calls := 0
-			if tc.resolver {
-				engine.storedPathResolver = func(path string) (string, bool) {
-					calls++
-					assert.Equal(t, storedPath, path)
-					return tc.mappedPath, tc.mappedPath != ""
-				}
-			}
-			lookups := 0
-			counting := &sourceRankCountingProvider{Provider: provider, lookups: &lookups}
-			ranked, err := engine.storedSourceRanksHigher(t.Context(), counting, storedPath, candidate)
-			require.NoError(t, err)
-			assert.Equal(t, tc.wantRanked, ranked)
-			assert.Equal(t, tc.wantCalls, calls)
-			if tc.wantRanked {
-				assert.Equal(t, 1, lookups)
-			} else {
-				assert.Zero(t, lookups, "unmapped stored paths must not reach the local provider")
 			}
 		})
 	}

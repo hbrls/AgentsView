@@ -230,21 +230,3 @@ func FuzzCommandGroupsCatalogCompatibility(f *testing.F) {
 		assert.NotContains(t, canonical.String(), "deprecated")
 	})
 }
-
-// Docker deployments and installed services keep their argv across upgrades,
-// so the binary must launch canonical commands that will outlive the legacy
-// spellings and do not print deprecation warnings into service logs.
-func TestCommandGroupsSelfLaunchedCommandsAreCanonical(t *testing.T) {
-	isolateDeploymentEnv(t)
-	t.Setenv("AGENTSVIEW_MODE", "pg-serve")
-	pgServe, err := deploymentArgs(nil)
-	require.NoError(t, err)
-	for _, args := range [][]string{pgServe, pgServiceKind.Args, clickHouseServiceKind.Args} {
-		cmd, rest, err := newRootCommand().Find(args)
-		require.NoError(t, err)
-		require.NoError(t, cmd.ParseFlags(rest))
-		for c := cmd; c != nil; c = c.Parent() {
-			assert.False(t, c.Hidden, "%v resolves through hidden legacy command %q", args, c.Name())
-		}
-	}
-}

@@ -24,15 +24,12 @@ import (
 
 	"github.com/gofrs/flock"
 	"github.com/spf13/cobra"
-	"go.kenn.io/agentsview/internal/archivesource"
 	"go.kenn.io/agentsview/internal/codexcloud"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/insight"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/poller"
-	"go.kenn.io/agentsview/internal/power"
-	"go.kenn.io/agentsview/internal/rawderive"
 	"go.kenn.io/agentsview/internal/recall/extract"
 	"go.kenn.io/agentsview/internal/remotesync"
 	"go.kenn.io/agentsview/internal/secrets"
@@ -388,17 +385,13 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	}
 
 	var engine *sync.Engine
-	var attachedSources *archivesource.Manager
 	var reloadIngestion server.IngestionReloader
 	var completeWorkerStartup func()
 	if !cfg.NoSync {
 		var onStartupReconciled func(sync.SyncStats, error)
 		var queueRebuildRetry func(sync.WatchBatch)
 		engine = sync.NewEngine(ctx, database, sync.EngineConfig{
-			AgentDirs: cfg.AgentDirs,
-			RebuildSources: func(ctx context.Context) (sync.RebuildOptions, error) {
-				return archivesource.RebuildContributors(ctx, cfg)
-			},
+			AgentDirs:               cfg.AgentDirs,
 			SourceMachines:          cfg.SourceMachines,
 			ProviderMetadata:        cfg.ProviderMetadata,
 			DisabledAgents:          cfg.DisabledAgents,
@@ -433,24 +426,11 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		if opts.ReloadConfig != nil {
 			reloadIngestion = ingestion.Reload
 		}
-		attachedSources, err = archivesource.NewManager(ctx, cfg, database, engine, ingestion.FlushPending)
-		if err != nil {
-			fatal("configuring archive sources: %v", err)
-		}
-		ingestion.attached = attachedSources
-		defer attachedSources.Close()
 		acknowledgeStartup := newStartupReconciliationHandler(
 			ctx, database.CheckpointWALTruncateWithRetry, ingestion.OpenWatcherDispatch,
 		)
 		onStartupReconciled = func(stats sync.SyncStats, err error) {
 			acknowledgeStartup(stats, err)
-			if err == nil && stats.ProcessingCompleteOrRetrying() && !database.NeedsResync() {
-				go idleTracker.Do(func() {
-					if _, err := attachedSources.Drain(ctx, nil); err != nil && ctx.Err() == nil {
-						log.Printf("archive sources: %v", err)
-					}
-				})
-			}
 		}
 
 		if !opts.SkipInitialSync && !startupRebuild {
@@ -642,7 +622,6 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		}
 	}
 	if engine != nil {
-		srvOpts = append(srvOpts, server.WithArchiveSources(attachedSources))
 		srvOpts = append(srvOpts, server.WithLocalSyncRunner(
 			ingestion.foregroundSync(withAttachedSources(attachedSources, newForegroundSyncRunner(ctx, cfg, engine, database, writeLock))),
 		))
@@ -3215,7 +3194,6 @@ func startPeriodicSync(
 	idleTracker *server.IdleTracker,
 	validRemotes bool,
 	emitter sync.Emitter,
-	attachedSources *archivesource.Manager,
 ) {
 	if validRemotes {
 		for _, rh := range cfg.RemoteHosts {

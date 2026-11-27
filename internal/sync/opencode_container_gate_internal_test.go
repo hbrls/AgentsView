@@ -1705,7 +1705,6 @@ func TestOpenCodePersistedVerificationAdmission(t *testing.T) {
 		{name: "future record version", age: time.Minute, version: 2},
 		{name: "replaced", setup: func(_ *Engine, s *parser.SQLiteContainerState) { s.DBInode++ }},
 		{name: "missing identity", setup: func(_ *Engine, s *parser.SQLiteContainerState) { s.DBInode = 0 }},
-		{name: "rewritten path", setup: func(e *Engine, _ *parser.SQLiteContainerState) { e.pathRewriter = func(s string) string { return s } }},
 		{name: "read only", setup: func(e *Engine, _ *parser.SQLiteContainerState) {
 			reader, err := db.OpenReadOnly(t.Context(), archive.Path())
 			require.NoError(t, err)

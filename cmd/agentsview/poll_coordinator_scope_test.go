@@ -190,9 +190,8 @@ func TestUnwatchedPollFolderRelease(t *testing.T) {
 			failed       bool
 			superseded   bool
 			replaced     bool
-			mirrorWatch  bool
 		}{
-			{name: "eight releases coalesce into one root pass", folders: 8, mirrorWatch: true},
+			{name: "eight releases coalesce into one root pass", folders: 8},
 			{name: "folder recovery respects another provider's missing probe", folders: 1, missingProbe: true},
 			{name: "folder release retries after a failed pass", folders: 1, failed: true},
 			{name: "superseded folder disappears after failed pass", folders: 1, failed: true, superseded: true},
@@ -237,23 +236,6 @@ func TestUnwatchedPollFolderRelease(t *testing.T) {
 					}
 					add := coordinator.AddObligation
 					releaseObligation := coordinator.RemoveObligation
-					if tc.mirrorWatch {
-						options := archivePushWatchWatcherOptions(nil, coordinator)
-						add = func(obligation pollingObligation) error {
-							return options.OnPollingRequired(agentsync.PollingObligation{
-								Key: obligation.Key, Probe: obligation.Probe,
-								Scopes: []agentsync.PollingScope{
-									{Agent: "claude", Root: obligation.Probe},
-									{Agent: "codex", Root: root},
-								},
-								ReleaseScopes: []agentsync.PollingScope{
-									{Agent: "claude", Root: root},
-									{Agent: "codex", Root: root},
-								},
-							})
-						}
-						releaseObligation = options.OnPollingReleased
-					}
 					var folders []string
 					var obligation pollingObligation
 					for i := range tc.folders {

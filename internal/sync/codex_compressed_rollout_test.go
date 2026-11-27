@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -139,8 +138,7 @@ var codexCompressedRuns = []struct {
 	}},
 	{"rebuild", func(t *testing.T, e *Engine) {
 		t.Helper()
-		_, err := e.ResyncAllWithOptions(t.Context(), nil, RebuildOptions{})
-		require.NoError(t, err)
+		e.ResyncAll(t.Context(), nil)
 	}},
 }
 
@@ -415,24 +413,14 @@ func TestCodexDuplicatePreferenceAcrossRoots(t *testing.T) {
 
 func TestCodexCompressedParseAdmissionAndStaging(t *testing.T) {
 	for _, tc := range []struct {
-		name        string
-		outputSize  int
-		knownSize   bool
-		staged      bool
-		s3          bool
-		truncated   bool
-		cancelFetch bool
-		idPrefix    string
+		name       string
+		outputSize int
+		knownSize  bool
+		staged     bool
 	}{
 		{name: "small known size", outputSize: 32, knownSize: true},
 		{name: "large known size", outputSize: 512 << 10, knownSize: true, staged: true},
 		{name: "unknown size", outputSize: 32, staged: true},
-		{name: "S3 small known size", outputSize: 32, knownSize: true, s3: true},
-		{name: "S3 large known size", outputSize: 512 << 10, knownSize: true, staged: true, s3: true},
-		{name: "S3 unknown size", outputSize: 32, staged: true, s3: true},
-		{name: "S3 prefixed unknown size", outputSize: 32, staged: true, s3: true, idPrefix: "mirror~"},
-		{name: "S3 truncated frame", outputSize: 512 << 10, knownSize: true, s3: true, truncated: true},
-		{name: "S3 canceled download", outputSize: 32, s3: true, cancelFetch: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			output := strings.Repeat("x", tc.outputSize)
@@ -462,11 +450,6 @@ func TestCodexCompressedParseAdmissionAndStaging(t *testing.T) {
 			}
 			var header zstd.Header
 			require.NoError(t, header.Decode(compressed))
-			require.Equal(t, tc.knownSize, header.HasFCS, "fixture must exercise the intended frame size")
-			if tc.truncated {
-				compressed = compressed[:len(compressed)-4]
-			}
-
 			root := t.TempDir()
 			path := filepath.Join(root, codexCompressedName)
 			require.NoError(t, os.WriteFile(path, compressed, 0o600))
@@ -475,7 +458,6 @@ func TestCodexCompressedParseAdmissionAndStaging(t *testing.T) {
 			engine := newCompressedRolloutEngine(t, database, root, EngineConfig{
 				StagedCodexParseMinBytes: 32 << 10,
 				CodexStagingDir:          stagingDir,
-				IDPrefix:                 tc.idPrefix,
 			})
 			assertReleased := func() {
 				t.Helper()
@@ -489,49 +471,14 @@ func TestCodexCompressedParseAdmissionAndStaging(t *testing.T) {
 				assert.Empty(t, entries, "scratch files must be removed after use")
 			}
 			file := parser.DiscoveredFile{
-				Agent: parser.AgentCodex, Path: path, SourceSize: int64(len(compressed)),
+				Agent: parser.AgentCodex, Path: path,
 			}
 			sessionID := compressedRolloutSession
 			subagentID := "codex:agent-1"
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
-			if tc.s3 {
-				file.Path = "s3://bucket/laptop/raw/codex/2026/09/01/" + codexCompressedName
-				file.Machine = "laptop"
-				file.SourceMtime = 1788256800000000000
-				file.SourceFingerprint = "s3:compressed-fixture"
-				sessionID = "laptop~" + sessionID
-				subagentID = "laptop~" + subagentID
-				oldFetch, oldStat := fetchS3Object, statS3Object
-				t.Cleanup(func() { fetchS3Object, statS3Object = oldFetch, oldStat })
-				fetchS3Object = func(uri string) (io.ReadCloser, error) {
-					if uri != file.Path {
-						return nil, missingS3ObjectError()
-					}
-					if tc.cancelFetch {
-						cancel()
-					}
-					return io.NopCloser(bytes.NewReader(compressed)), nil
-				}
-				statS3Object = func(string) (parser.S3Object, error) {
-					return parser.S3Object{}, missingS3ObjectError()
-				}
-			}
-			sessionID = tc.idPrefix + sessionID
-			subagentID = tc.idPrefix + subagentID
 			result := engine.processFile(ctx, file)
 			defer func() { result.releaseStaged(); result.retentionLease.Release() }()
-			if tc.truncated || tc.cancelFetch {
-				require.Error(t, result.err)
-				if tc.cancelFetch {
-					require.ErrorIs(t, result.err, context.Canceled)
-				}
-				assert.Empty(t, result.results, "corrupt input must not publish a partial transcript")
-				result.releaseStaged()
-				result.retentionLease.Release()
-				assertReleased()
-				return
-			}
 			require.NoError(t, result.err)
 			require.Len(t, result.results, 1)
 			messages := result.results[0].Messages
@@ -587,11 +534,6 @@ func TestCodexCompressedParseAdmissionAndStaging(t *testing.T) {
 			storedSize, _, ok := database.GetSessionFileInfo(t.Context(), sessionID)
 			require.True(t, ok)
 			assert.Equal(t, int64(len(compressed)), storedSize)
-			if tc.s3 {
-				storedHash, ok := database.GetSessionFileHash(t.Context(), sessionID)
-				require.True(t, ok)
-				assert.Equal(t, file.SourceFingerprint, storedHash)
-			}
 		})
 	}
 }

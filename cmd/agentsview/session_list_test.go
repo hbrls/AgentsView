@@ -92,30 +92,6 @@ func TestSessionListIncludeSource(t *testing.T) {
 		}
 	})
 
-	t.Run("default", func(t *testing.T) {
-		dataDir := newAgentDataDir(t)
-		seed(t, dataDir)
-
-		out, err := executeCommand(newRootCommand(),
-			"session", "list", "--format", "json")
-		require.NoError(t, err)
-		for _, session := range assertSessionList(t, out) {
-			assert.NotContains(t, session, "file_path")
-		}
-	})
-
-	t.Run("explicit_false", func(t *testing.T) {
-		dataDir := newAgentDataDir(t)
-		seed(t, dataDir)
-
-		out, err := executeCommand(newRootCommand(),
-			"session", "list", "--format", "json", "--include-source=false")
-		require.NoError(t, err)
-		for _, session := range assertSessionList(t, out) {
-			assert.NotContains(t, session, "file_path")
-		}
-	})
-
 	t.Run("human", func(t *testing.T) {
 		dataDir := newAgentDataDir(t)
 		seed(t, dataDir)

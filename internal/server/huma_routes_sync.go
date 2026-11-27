@@ -11,8 +11,6 @@ import (
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
-	"go.kenn.io/agentsview/internal/archivesource"
-	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/remotesource"
 	"go.kenn.io/agentsview/internal/remotesync"
@@ -273,9 +271,6 @@ func (s *Server) syncEngineForLocal(ctx context.Context, local *db.DB) *syncpkg.
 		initCtx = context.WithoutCancel(ctx)
 	}
 	s.onDemandEngine = syncpkg.NewEngine(initCtx, local, syncpkg.EngineConfig{
-		RebuildSources: func(ctx context.Context) (syncpkg.RebuildOptions, error) {
-			return archivesource.RebuildContributors(ctx, s.ingestionConfig())
-		},
 		AgentDirs:               cfg.AgentDirs,
 		SourceMachines:          cfg.SourceMachines,
 		ProviderMetadata:        cfg.ProviderMetadata,
@@ -427,7 +422,7 @@ func (s *Server) runSyncWithResyncFallback(
 	if err != nil {
 		return stats, err
 	}
-	stats, err = s.finishLocalSync(ctx, engine, stats, progress, false)
+	stats, err = s.finishLocalSync(stats)
 	if err != nil {
 		return stats, err
 	}
@@ -492,55 +487,14 @@ func (s *Server) runResyncWithFallback(
 	if err != nil {
 		return stats, err
 	}
-	return s.finishLocalSync(ctx, engine, stats, progress, false)
+	return s.finishLocalSync(stats)
 }
 
-// Manual sync creates attachment state lazily in --no-sync mode. Startup-only
-// requests never reach this path, and the manager starts no automatic scans.
-// Scheduled callers, such as pushes, leave recently failed sources in backoff.
-func (s *Server) finishLocalSync(
-	ctx context.Context, engine *syncpkg.Engine, stats syncpkg.SyncStats,
-	progress func(syncpkg.Progress), scheduled bool,
-) (syncpkg.SyncStats, error) {
+func (s *Server) finishLocalSync(stats syncpkg.SyncStats) (syncpkg.SyncStats, error) {
 	if !stats.ProcessingCompleteOrRetrying() {
 		return stats, requireProcessingComplete(stats)
 	}
-	manager := s.archiveSources
-	if manager == nil {
-		cfg := s.ingestionConfig()
-		if len(cfg.ArchiveSources) == 0 {
-			return stats, nil
-		}
-		local, ok := s.db.(*db.DB)
-		if !ok {
-			return stats, errors.New("archive sources require a local archive")
-		}
-		s.mu.Lock()
-		if s.onDemandArchiveSources == nil {
-			// The cached manager outlives this request.
-			ownerCtx := s.baseCtx
-			if ownerCtx == nil {
-				ownerCtx = context.WithoutCancel(ctx)
-			}
-			var err error
-			s.onDemandArchiveSources, err = archivesource.NewManager(ownerCtx, cfg, local, engine, nil)
-			if err != nil {
-				s.mu.Unlock()
-				return stats, err
-			}
-		}
-		manager = s.onDemandArchiveSources
-		s.mu.Unlock()
-	}
-	var archiveStats syncpkg.SyncStats
-	var err error
-	if scheduled {
-		archiveStats, err = manager.DrainScheduled(ctx)
-	} else {
-		archiveStats, err = manager.Drain(ctx, progress)
-	}
-	stats.Merge(archiveStats)
-	return stats, err
+	return stats, nil
 }
 
 // runResyncRoute runs a /resync request. Both resync runners fall back to an

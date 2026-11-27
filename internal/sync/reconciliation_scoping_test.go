@@ -255,13 +255,11 @@ func TestReconcileProviderRootsUnresolvedRootsAreBoundedNoOp(t *testing.T) {
 	}
 
 	for _, tc := range []struct {
-		name       string
-		roots      []string
-		wantRemote int
+		name  string
+		roots []string
 	}{
 		{name: "blank", roots: []string{""}},
 		{name: "unrelated", roots: []string{t.TempDir()}},
-		{name: "remote", roots: []string{"s3://bucket/prefix"}, wantRemote: 1},
 		{name: "empty", roots: nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -272,7 +270,6 @@ func TestReconcileProviderRootsUnresolvedRootsAreBoundedNoOp(t *testing.T) {
 				"an unresolved request must complete before spool allocation")
 			result := engine.LastReconciliationResult()
 			assert.True(t, result.Complete)
-			assert.Equal(t, tc.wantRemote, result.Metrics.ExcludedRemoteRoots)
 			active, err := database.GetSession(t.Context(), "keep")
 			require.NoError(t, err)
 			assert.NotNil(t, active,

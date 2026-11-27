@@ -1666,8 +1666,7 @@ func TestProcessFileRowlessCachedSourceChangedHashReparses(t *testing.T) {
 
 func TestCacheSkipRetainsOnlyLatestSourceHashKey(t *testing.T) {
 	engine := &Engine{
-		skipCache:        make(map[string]int64),
-		skipFingerprints: make(map[string]string),
+		skipCache: make(map[string]int64),
 	}
 	const (
 		plain = "/archive/session.jsonl"

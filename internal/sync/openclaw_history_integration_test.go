@@ -16,13 +16,11 @@ import (
 
 func TestOpenClawShortenedLegacySourcePreservesArchive(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		remote bool
+		name string
 	}{
 		{name: "full sync"},
 		{name: "changed path"},
 		{name: "single session"},
-		{name: "remote changed path", remote: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root, other := t.TempDir(), t.TempDir()
@@ -42,12 +40,6 @@ func TestOpenClawShortenedLegacySourcePreservesArchive(t *testing.T) {
 				Machine:   "local",
 			}
 			sessionID := "openclaw:main:shortened"
-			if tc.remote {
-				cfg.IDPrefix = "host~"
-				cfg.PathRewriter = func(path string) string { return "host:" + path }
-				cfg.StoredPathResolver = func(path string) (string, bool) { return strings.CutPrefix(path, "host:") }
-				sessionID = "host~" + sessionID
-			}
 			engine := sync.NewEngine(t.Context(), database, cfg)
 			t.Cleanup(engine.Close)
 			require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
@@ -86,9 +78,6 @@ func TestOpenClawShortenedLegacySourcePreservesArchive(t *testing.T) {
 			require.NotNil(t, session)
 			assert.Equal(t, 1, session.MessageCount)
 			assert.Equal(t, 1, session.UserMessageCount)
-			if tc.remote {
-				replacement = cfg.PathRewriter(replacement)
-			}
 			assert.Equal(t, replacement, database.GetSessionFilePath(t.Context(), sessionID))
 		})
 	}

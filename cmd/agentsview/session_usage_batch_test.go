@@ -11,49 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/dbtest"
 )
-
-func TestSessionUsageBatchPGOrderedResults(t *testing.T) {
-	dataDir := newAgentDataDir(t)
-	t.Setenv("AGENTSVIEW_PG_URL", "postgres://example.test/agentsview")
-	store := dbtest.OpenTestDBAt(t, sessionsDBPath(dataDir))
-	seedSubagentOnlyUsage(t, store, "claude:parent", "agent-child", 42)
-	seedUsageSession(t, store, "codex:later", "usage-project", "codex", 17)
-	opens, closes := 0, 0
-	original := openPGReadStore
-	openPGReadStore = func(context.Context, config.Config, config.PGConfig) (db.Store, func(), error) {
-		opens++
-		return store, func() { closes++ }, nil
-	}
-	t.Cleanup(func() { openPGReadStore = original })
-	cmd := sessionUsageCommand(t, "session", "usage-batch", "claude:parent", "--pg", "--no-sync")
-	var out *sessionUsageBatchOutput
-	stderr := captureStderr(t, func() {
-		var err error
-		out, err = sessionUsageBatchDataForCommand(cmd, []string{
-			"claude:parent", "codex:missing", "codex:later", "claude:parent",
-		})
-		require.NoError(t, err)
-	})
-	assert.Empty(t, stderr)
-	require.Len(t, out.Results, 4)
-	assert.Equal(t, 1, opens)
-	assert.Equal(t, 1, closes)
-	assert.Equal(t, "claude:parent", out.Results[0].RequestedID)
-	assert.Equal(t, 0, out.Results[0].ExitCode)
-	assert.Equal(t, 2, out.Results[1].ExitCode)
-	assert.Nil(t, out.Results[1].Usage)
-	assert.Equal(t, "codex:later", out.Results[2].RequestedID)
-	assert.Equal(t, 0, out.Results[2].ExitCode)
-	require.NotNil(t, out.Results[2].Usage)
-	assert.Equal(t, 17, out.Results[2].Usage.TotalOutputTokens)
-	assert.Equal(t, out.Results[0], out.Results[3])
-	var human strings.Builder
-	require.NoError(t, renderSessionUsageBatch(&human, out, "human"))
-	assert.Contains(t, human.String(), "claude:parent (exit 0)")
-}
 
 func TestSessionUsageBatchRemoteReusesSetup(t *testing.T) {
 	for _, autostart := range []bool{false, true} {
@@ -113,19 +71,13 @@ func TestSessionUsageBatchErrors(t *testing.T) {
 		assert.Equal(t, 1, out.Results[0].ExitCode)
 		assert.Contains(t, out.Results[0].Error, "usage unavailable")
 	})
-	t.Run("setup failure", func(t *testing.T) {
-		newAgentDataDir(t)
-		cmd := sessionUsageCommand(t, "session", "usage-batch", "codex:a", "--server", "http://example.test", "--pg")
-		_, err := sessionUsageBatchDataForCommand(cmd, []string{"codex:a"})
-		require.ErrorContains(t, err, "mutually exclusive")
-	})
 	t.Run("writer failure", func(t *testing.T) {
 		out := &sessionUsageBatchOutput{Results: []sessionUsageBatchResult{{
 			RequestedID: "codex:a", ExitCode: 1, Error: "usage unavailable",
 		}}}
 		for _, format := range []string{"json", "human"} {
 			t.Run(format, func(t *testing.T) {
-				err := renderSessionUsageBatch(&failingRawSyncWriter{err: errors.New("output unavailable")}, out, format)
+				err := renderSessionUsageBatch(&failingWriter{err: errors.New("output unavailable")}, out, format)
 				require.ErrorContains(t, err, "output unavailable")
 			})
 		}
@@ -152,4 +104,10 @@ func TestSessionUsageBatchMissingDiagnostic(t *testing.T) {
 			assert.Equal(t, 1, strings.Count(output.String(), "session not found: codex:missing"))
 		})
 	}
+}
+
+type failingWriter struct{ err error }
+
+func (w *failingWriter) Write([]byte) (int, error) {
+	return 0, w.err
 }

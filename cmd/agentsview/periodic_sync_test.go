@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -158,60 +157,6 @@ func (f *fakeScheduledEngine) ReconcileProviderRoots(
 ) error {
 	f.calls = append(f.calls, scheduledReconcileTarget{Agent: agent, Roots: roots})
 	return f.err
-}
-
-func TestRemoteSourceSyncRootsSelectsSchemeRoots(t *testing.T) {
-	local := t.TempDir()
-	cfg := config.Config{
-		AgentDirs: map[parser.AgentType][]string{
-			parser.AgentClaude: {local, "s3://bucket/machine/raw/claude"},
-			parser.AgentCodex: {
-				"s3://bucket/machine/raw/codex",
-				"S3://bucket/upper/raw/codex",
-			},
-		},
-	}
-	assert.Equal(t, []string{
-		"s3://bucket/machine/raw/claude",
-		"s3://bucket/machine/raw/codex",
-	}, remoteSourceSyncRoots(cfg),
-		"remote roots are selected by exact lowercase scheme, deduplicated, "+
-			"and sorted; provider discovery recognizes only lowercase s3://, "+
-			"so an uppercase root is a filesystem path here as it is at startup")
-}
-
-func TestRemoteSourceSyncRootsEmptyForLocalOnlyConfig(t *testing.T) {
-	cfg := config.Config{AgentDirs: map[parser.AgentType][]string{
-		parser.AgentClaude: {t.TempDir()},
-	}}
-	assert.Empty(t, remoteSourceSyncRoots(cfg))
-}
-
-type fakeRemoteSourceSyncEngine struct {
-	calls [][]string
-	since []time.Time
-	stats agentsync.SyncStats
-}
-
-func (f *fakeRemoteSourceSyncEngine) SyncRootsSince(
-	_ context.Context, roots []string, since time.Time, _ agentsync.ProgressFunc,
-) agentsync.SyncStats {
-	f.calls = append(f.calls, append([]string(nil), roots...))
-	f.since = append(f.since, since)
-	return f.stats
-}
-
-func TestRunRemoteSourceSyncPassSyncsConfiguredRemoteRoots(t *testing.T) {
-	engine := &fakeRemoteSourceSyncEngine{}
-	runRemoteSourceSyncPass(t.Context(), engine, nil)
-	assert.Empty(t, engine.calls, "no remote roots -> no scoped sync")
-
-	roots := []string{"s3://bucket/machine/raw/claude"}
-	runRemoteSourceSyncPass(t.Context(), engine, roots)
-	require.Len(t, engine.calls, 1)
-	assert.Equal(t, roots, engine.calls[0])
-	assert.True(t, engine.since[0].IsZero(),
-		"the pass must cover the full remote scope; unchanged objects skip on fingerprints")
 }
 
 func TestRunScheduledSyncPassCallsPerAgent(t *testing.T) {

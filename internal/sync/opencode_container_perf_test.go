@@ -3,6 +3,7 @@ package sync_test
 import (
 	"database/sql"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -282,7 +283,8 @@ func TestOpenCodeHiddenChildChangesAreDetected(t *testing.T) {
 			tc.mutate(t, oc)
 
 			if !tc.projectRename {
-				require.NoError(t, env.db.DeleteSyncStateByPrefix(t.Context(), "sqlite-container:"))
+				require.NoError(t, env.db.DeleteSyncState(t.Context(),
+					"sqlite-container:"+filepath.Join(env.opencodeDir, "opencode.db")))
 			}
 			if tc.viaReconcile {
 				require.NoError(t, env.engine.ReconcileWatchRoots(t.Context(), []string{env.opencodeDir}, false))

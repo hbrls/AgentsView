@@ -42,7 +42,6 @@ func newFrictionCommand() *cobra.Command {
 	cmd.PersistentFlags().String("server", "", "Remote daemon URL for friction API requests")
 	cmd.PersistentFlags().String("server-token-file", "",
 		"File containing bearer token for explicit --server requests")
-	cmd.PersistentFlags().Bool("pg", false, "Read friction data from configured PostgreSQL")
 	cmd.AddCommand(newFrictionRunCommand())
 	cmd.AddCommand(newFrictionDigestCommand())
 	cmd.AddCommand(newFrictionFindingsCommand())
@@ -82,9 +81,6 @@ func newFrictionRunCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if format != "human" && format != "json" {
 				return errors.New("--format must be human or json")
-			}
-			if pgReadRequested(cmd) {
-				return errors.New("friction run builds digests in the local archive or daemon; --pg is read-only")
 			}
 			reports, err := runFrictionReview(cmd, req)
 			if err != nil {

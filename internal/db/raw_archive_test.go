@@ -2,78 +2,13 @@ package db
 
 import (
 	"context"
-	"database/sql"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-func TestRawArchiveAcceptanceAndCopy(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	root := RawArchiveRoot{ID: "root", ConfiguredRootID: "root", DeviceID: "device", Machine: "example", Provider: "claude", OriginalPath: "/example/sessions"}
-	require.NoError(t, d.RegisterRawArchiveRoot(ctx, root))
-	require.NoError(t, d.RegisterRawArchiveRoot(ctx, root))
-	changed := root
-	changed.OriginalPath = "/different"
-	require.Error(t, d.RegisterRawArchiveRoot(ctx, changed))
-	changed = root
-	changed.ID = "other"
-	changed.DeviceID = "other"
-	require.NoError(t, d.RegisterRawArchiveRoot(ctx, changed))
-	f := RawArchiveFile{RootID: root.ID, Path: "session.jsonl", SHA256: strings.Repeat("a", 64), Size: 2, ModTimeNS: 3}
-	require.NoError(t, d.RecordRawArchiveFile(ctx, f))
-	f.ModTimeNS++
-	f.Covered = true
-	require.NoError(t, d.RecordRawArchiveFile(ctx, f))
-	bad := f
-	bad.Size++
-	require.Error(t, d.RecordRawArchiveFile(ctx, bad))
-	f.SHA256 = strings.Repeat("b", 64)
-	require.NoError(t, d.RecordRawArchiveFile(ctx, f))
-	source := RawArchiveSource{ManifestID: "m1", RootID: root.ID, SourceKey: "session", OriginalPath: "/example/sessions/session.jsonl", CanonicalJSON: []byte(`{"version":1}`)}
-	accepted, err := d.AcceptRawArchiveSource(ctx, source)
-	require.NoError(t, err)
-	assert.Equal(t, "m1", accepted.ManifestID)
-	_, err = d.AcceptRawArchiveSource(ctx, source)
-	require.NoError(t, err)
-	collision := source
-	collision.CanonicalJSON = []byte(`{}`)
-	_, err = d.AcceptRawArchiveSource(ctx, collision)
-	require.Error(t, err)
-	next := source
-	next.ManifestID = "m2"
-	_, err = d.AcceptRawArchiveSource(ctx, next)
-	require.Error(t, err)
-	_, err = d.AcceptRawArchiveSource(ctx, source)
-	require.NoError(t, err)
-	require.NoError(t, d.RecordRawArchiveParse(ctx, "m1", "v1", "parse failed"))
-	require.ErrorIs(t, d.RecordRawArchiveParse(ctx, "missing", "v1", ""), sql.ErrNoRows)
-	target := testDB(t)
-	require.NoError(t, target.CopySyncStateFrom(t.Context(), d.path))
-	roots, err := target.ListRawArchiveRoots(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, []RawArchiveRoot{changed, root}, roots)
-	files, err := target.ListRawArchiveFiles(ctx, 0, 10)
-	require.NoError(t, err)
-	require.Len(t, files, 2)
-	assert.True(t, files[0].Covered)
-	generations, err := target.ListRawArchiveSources(ctx, "", 10)
-	require.NoError(t, err)
-	require.Len(t, generations, 1)
-	head, err := target.RawArchiveSourceByKey(ctx, root.ID, "session")
-	require.NoError(t, err)
-	require.NotNil(t, head)
-	assert.Equal(t, "m1", head.ManifestID)
-	assert.Equal(t, "parse failed", head.ParseError)
-	head, err = target.RawArchiveSourceByKey(ctx, root.ID, "missing")
-	require.NoError(t, err)
-	assert.Nil(t, head)
-}
 
 func TestRawArchiveSnapshot(t *testing.T) {
 	d := testDB(t)

@@ -691,8 +691,6 @@ func TestFailureCachePiebaldSchemaRepair(t *testing.T) {
 			}
 			require.False(t, run(engine))
 			require.True(t, run(engine), "unchanged schema failure must stop failing the pass")
-			replay := engine.SyncAllForceParseAfterCache(t.Context(), nil)
-			require.True(t, replay.ProcessingComplete(), "remote replay must keep cached failures suppressed")
 			restarted := NewEngine(t.Context(), database, cfg)
 			t.Cleanup(restarted.Close)
 			require.True(t, run(restarted), "failure must survive restart")
@@ -703,36 +701,6 @@ func TestFailureCachePiebaldSchemaRepair(t *testing.T) {
 			require.False(t, run(restarted), "a WAL-only schema repair must invalidate the cached failure")
 		})
 	}
-}
-
-func TestAbortedContributorKeepsSourceFailures(t *testing.T) {
-	parent, database, _ := newResyncSplitEngine(t)
-	_, _, provider, contributorRoot, path := newChangedPathOutcomeEngine(t, "contributor-failure",
-		func(string) parser.ParseOutcome { return parser.ParseOutcome{} })
-	info, err := os.Stat(path)
-	require.NoError(t, err)
-	provider.fingerprint = parser.SourceFingerprint{Key: path, MTimeNS: info.ModTime().UnixNano()}
-	provider.allowDiscover = true
-	provider.parseErr = errors.New("malformed source")
-	cfg := EngineConfig{
-		AgentDirs: map[parser.AgentType][]string{provider.Def.Type: {contributorRoot}}, Machine: "remote",
-		ProviderFactories:      []parser.ProviderFactory{directStreamingFactory{provider: provider}},
-		ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{provider.Def.Type: parser.ProviderMigrationProviderAuthoritative},
-	}
-	stats, err := parent.ResyncAllWithOptions(t.Context(), nil, RebuildOptions{
-		Contributors: []RebuildContributor{{Name: "remote", Config: cfg}},
-	})
-	require.NoError(t, err)
-	require.True(t, stats.Aborted)
-	persisted, err := database.LoadSourceFailures(t.Context())
-	require.NoError(t, err)
-	require.Contains(t, persisted, providerAgentSkipCacheKey(path, provider.Def.Type))
-	restarted := NewEngine(t.Context(), database, cfg)
-	t.Cleanup(restarted.Close)
-	parsed := provider.parseCalls.Load()
-	next := restarted.SyncAll(t.Context(), nil)
-	require.True(t, next.ProcessingComplete())
-	assert.Equal(t, parsed, provider.parseCalls.Load())
 }
 
 func TestFailureClassifierIgnoresCompanionPath(t *testing.T) {
@@ -797,7 +765,8 @@ func TestCachedOpenCodeFailureDoesNotVerifyContainer(t *testing.T) {
 		`UPDATE session_message SET data = '!', time_updated = 1900000000000 WHERE session_id = ? AND type = 'user'`, sessionID)
 	require.NoError(t, err)
 	// Clear recent verification so the corrupt child exercises failure caching.
-	require.NoError(t, archive.DeleteSyncStateByPrefix(t.Context(), sqliteContainerSyncStatePrefix))
+	require.NoError(t, archive.DeleteSyncState(t.Context(),
+		sqliteContainerSyncStatePrefix+filepath.Join(root, "opencode.db")))
 	engine := NewEngine(t.Context(), archive, cfg)
 	t.Cleanup(engine.Close)
 	failed := engine.SyncAll(t.Context(), nil)

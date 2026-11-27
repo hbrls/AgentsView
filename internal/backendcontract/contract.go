@@ -17,7 +17,6 @@ import (
 var (
 	_ db.Store = (*db.DB)(nil)
 	_ db.Store = (*postgresstore.Store)(nil)
-	_ db.Store = (*postgresstore.HostedStore)(nil)
 )
 
 // Remote replicas: push target and read-only serve.

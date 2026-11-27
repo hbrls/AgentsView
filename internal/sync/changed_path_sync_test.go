@@ -228,47 +228,6 @@ func TestSyncChangedPathPlanFallbackDiscoveryStaysProviderBounded(t *testing.T) 
 	assert.Zero(t, callsB)
 }
 
-func TestSyncChangedPathPlanRemoteForceReplacePreservesMissingOwnedMember(t *testing.T) {
-	database := dbtest.OpenTestDB(t)
-	root := t.TempDir()
-	path, fingerprint := writeProcessProviderSource(t, root, "container.jsonl")
-	source := processFixtureSource(path)
-	provider := newProcessFixtureProvider(source, fingerprint, parser.ParseOutcome{
-		SkipReason:        parser.SkipNonInteractive,
-		ResultSetComplete: true,
-		ForceReplace:      true,
-	})
-	storedPath := "remote:" + path
-	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
-		ID: "cowork:missing", Agent: string(parser.AgentCowork),
-		Project: "fixture-project", Machine: "remote", FilePath: &storedPath,
-	}))
-	engine := NewEngine(t.Context(), database, EngineConfig{
-		AgentDirs: map[parser.AgentType][]string{parser.AgentCowork: {root}},
-		Machine:   "remote", Ephemeral: true,
-		ProviderFactories: []parser.ProviderFactory{processFixtureFactory{provider: provider}},
-		ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
-			parser.AgentCowork: parser.ProviderMigrationProviderAuthoritative,
-		},
-		PathRewriter: func(value string) string { return "remote:" + value },
-	})
-	t.Cleanup(engine.Close)
-	file := parser.DiscoveredFile{
-		Path: path, Agent: parser.AgentCowork,
-		ProviderSource: &source, ProviderProcess: true,
-	}
-
-	result, err := engine.SyncChangedPathPlanContext(t.Context(), ChangedPathPlan{
-		Files: []parser.DiscoveredFile{file},
-	}, nil)
-	require.NoError(t, err)
-	assert.Zero(t, result.Stats.Failed)
-	retained, err := database.GetSession(t.Context(), "cowork:missing")
-	require.NoError(t, err)
-	require.NotNil(t, retained)
-	assert.Nil(t, retained.DeletedAt)
-}
-
 func TestRemoteChangedPathWorkBoundedByPlannedSources(t *testing.T) {
 	run := func(t *testing.T, unrelatedRoots int) (
 		providerCalls, unrelatedDiscoveries, globalLinkPasses int,

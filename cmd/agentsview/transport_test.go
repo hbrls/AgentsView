@@ -794,7 +794,6 @@ func TestEnsureTransport_ArchiveWriteNewerDaemonDataVersionHintsRestart(t *testi
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "data version")
 	assert.Contains(t, err.Error(), "newer than this agentsview binary")
-	assert.Contains(t, err.Error(), "pg service")
 	assert.NotContains(t, err.Error(), "older agentsview version")
 }
 
@@ -838,7 +837,6 @@ func TestAppendDaemonCompatibilityHintPicksDirection(t *testing.T) {
 	)
 	require.ErrorIs(t, ahead, base)
 	assert.Contains(t, ahead.Error(), "newer than this agentsview binary")
-	assert.Contains(t, ahead.Error(), "pg push --watch")
 	assert.NotContains(t, ahead.Error(), "older agentsview version")
 }
 

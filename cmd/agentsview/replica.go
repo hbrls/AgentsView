@@ -202,15 +202,6 @@ func runReplicaPushTarget(
 	cfg ReplicaPushConfig,
 	ref storage.ReplicaTargetRef,
 ) error {
-	if backend.Name() == "pg" {
-		pg, err := appCfg.ResolvePGTarget(ref.Name)
-		if err != nil {
-			return err
-		}
-		if pg.RawTenant != "" || pg.RawDerivation {
-			return errors.New("pg push cannot mutate a hosted-owned projection")
-		}
-	}
 	target, err := backend.ResolveTarget(appCfg, ref)
 	if err != nil {
 		return err
@@ -606,18 +597,6 @@ func prepareReplicaServeImpl(
 	if target.Target.URL == "" {
 		return replicaServeStartup{}, fmt.Errorf("%s serve: url not configured", name)
 	}
-	if name == "pg" {
-		pg, err := appCfg.ResolvePG()
-		if err != nil {
-			return replicaServeStartup{}, err
-		}
-		if err := pg.ValidateRawDerivation(appCfg.RequireAuth); err != nil {
-			return replicaServeStartup{}, err
-		}
-		if pg.RawTenant != "" {
-			return prepareHostedPGServe(ctx, appCfg, pg, basePath, pprof)
-		}
-	}
 
 	applyClassifierConfig(appCfg)
 	ctx, stop := signal.NotifyContext(
@@ -754,9 +733,6 @@ func runPreparedReplicaServe(name string, startup replicaServeStartup) error {
 		return fmt.Errorf("%s serve: %w", name, err)
 	}
 
-	if startup.startWorker != nil {
-		startup.startWorker()
-	}
 	// Write the kit runtime record so CLI commands can discover this
 	// daemon. ReadOnly=true marks it as a replica serve (read-only)
 	// so clients can select an appropriate transport.
