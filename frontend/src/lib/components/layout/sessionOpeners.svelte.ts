@@ -91,7 +91,8 @@ export class SessionOpeners {
       (this.isLocal &&
         (this.editorOpeners.length > 0 ||
           this.fileOpeners.length > 0 ||
-          (this.sessionDir !== null && !!this.session?.file_path))),
+          this.sessionDir !== null ||
+          !!this.session?.file_path)),
   );
 
   private readOpeners() {
@@ -229,6 +230,20 @@ export class SessionOpeners {
       return;
     }
     const ok = await copyToClipboard(this.sessionDir);
+    this.showFeedback(
+      ok ? m.session_breadcrumb_path_copied() : m.session_breadcrumb_failed(),
+      ok ? "success" : "error",
+    );
+  }
+
+  async copySourceFilePath() {
+    this.menuOpen = false;
+    const filePath = this.session?.file_path;
+    if (!filePath) {
+      this.showFeedback(m.session_breadcrumb_no_path_available(), "error");
+      return;
+    }
+    const ok = await copyToClipboard(filePath);
     this.showFeedback(
       ok ? m.session_breadcrumb_path_copied() : m.session_breadcrumb_failed(),
       ok ? "success" : "error",

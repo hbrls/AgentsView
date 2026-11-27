@@ -114,6 +114,12 @@
           </span>
           <span class="open-menu-name">{m.session_breadcrumb_copy_directory_path()}</span>
         </button>
+        <button class="open-menu-item" onclick={() => openers.copySourceFilePath()}>
+          <span class="open-menu-num">
+            <CopyIcon size="14" aria-hidden="true" />
+          </span>
+          <span class="open-menu-name">{m.header_actions_copy_source_path()}</span>
+        </button>
         {#if openers.editorOpeners.length > 0 || openers.fileOpeners.length > 0}
           <div class="open-menu-divider"></div>
           <div class="open-menu-section">{m.session_breadcrumb_open_in()}</div>
