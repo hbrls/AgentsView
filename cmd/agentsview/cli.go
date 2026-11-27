@@ -140,8 +140,6 @@ func newRootCommand() *cobra.Command {
 	root.AddCommand(newVersionCommand())
 	root.AddCommand(newAgentsCommand())
 	root.AddCommand(newOpenAPICommand())
-	root.AddCommand(newRemoteSyncCommand())
-	root.AddCommand(newGitHookCommand())
 	groupCommands(root)
 	root.AddCommand(newCLISearchCommand(root))
 
@@ -159,6 +157,18 @@ func newRootCommand() *cobra.Command {
 
 func newServeCommand() *cobra.Command {
 	return newServeCommandWithDaemonDeps(defaultDaemonCommandDeps())
+}
+
+// addPprofFlag registers the hidden --pprof flag shared by every command
+// that serves the web UI and API.
+func addPprofFlag(cmd *cobra.Command, enabled *bool) {
+	cmd.Flags().BoolVar(
+		enabled,
+		"pprof",
+		false,
+		"Serve net/http/pprof under /debug/pprof (developer use)",
+	)
+	_ = cmd.Flags().MarkHidden("pprof")
 }
 
 func newServeCommandWithDaemonDeps(deps daemonCommandDeps) *cobra.Command {
@@ -399,10 +409,6 @@ func newSyncCommandWithRunner(run func(context.Context, SyncConfig)) *cobra.Comm
 	cmd.Flags().BoolVar(
 		&cfg.Full, "full", false,
 		"Force a full resync regardless of data version",
-	)
-	cmd.Flags().StringVar(
-		&cfg.Host, "host", "",
-		"Configured remote host name",
 	)
 	cmd.Flags().StringVar(
 		&cfg.CPUProfile, "cpuprofile", "",

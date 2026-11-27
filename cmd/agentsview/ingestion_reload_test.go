@@ -381,14 +381,14 @@ func TestArchiveWriteRoutesHandleIdleCollection(t *testing.T) {
 			syncRunner := newForegroundSyncRunner(t.Context(), cfg, engine, database, nil)
 			resyncRunner := newForegroundResyncRunner(t.Context(), cfg, engine, database)
 			ts := serveIngestionArchive(t, cfg, database, engine, ingestion,
-				server.WithLocalSyncRunner(ingestion.foregroundSync(withAttachedSources(nil, func(ctx context.Context, progress func(agentsync.Progress)) (agentsync.SyncStats, error) {
+				server.WithLocalSyncRunner(ingestion.foregroundSync(func(ctx context.Context, progress func(agentsync.Progress)) (agentsync.SyncStats, error) {
 					syncCalls.Add(1)
 					return syncRunner(ctx, progress)
-				}))),
-				server.WithLocalResyncRunner(server.LocalResyncRunner(ingestion.foregroundSync(withAttachedSources(nil, func(ctx context.Context, progress func(agentsync.Progress)) (agentsync.SyncStats, error) {
+				})),
+				server.WithLocalResyncRunner(server.LocalResyncRunner(ingestion.foregroundSync(func(ctx context.Context, progress func(agentsync.Progress)) (agentsync.SyncStats, error) {
 					resyncCalls.Add(1)
 					return resyncRunner(ctx, progress)
-				})))),
+				}))),
 			)
 			request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, ts.URL+"/api/v1"+tc.route, nil)
 			require.NoError(t, err)

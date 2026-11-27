@@ -21,14 +21,12 @@ func TestKataHubEligibilityLoggedAtStartup(t *testing.T) {
 	tests := []struct {
 		name    string
 		enabled bool
-		pgURL   string
 		conn    *kata.Conn
 		want    string
 	}{
 		{name: "standalone hub", enabled: true, want: "kata: hub eligibility hub"},
-		{name: "PG pusher", enabled: true, pgURL: "postgres://pg.example.test/agentsview", want: "kata: hub eligibility not_hub"},
 		{name: "disabled", want: "kata: hub eligibility disabled"},
-		{name: "explicit PG serve hub", enabled: true, pgURL: "postgres://pg.example.test/agentsview", conn: kata.NewConn(kata.Config{Enabled: true, Hub: true, Project: "agentsview"}), want: "kata: hub eligibility hub"},
+		{name: "explicit shared hub conn", enabled: true, conn: kata.NewConn(kata.Config{Enabled: true, Hub: true, Project: "agentsview"}), want: "kata: hub eligibility hub"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -42,7 +40,6 @@ func TestKataHubEligibilityLoggedAtStartup(t *testing.T) {
 				opts = append(opts, server.WithKataConn(tt.conn))
 			}
 			setupWithServerOpts(t, opts, func(c *config.Config) {
-				c.PG = config.PGConfig{URL: tt.pgURL}
 				c.Kata = config.KataConfig{Enabled: tt.enabled, Endpoint: "https://kata.example.test/?token=secret", Project: "agentsview"}
 			})
 			log.SetOutput(original)
@@ -142,30 +139,17 @@ func TestKataStatusRouteWaitsForSlowUnavailableProbe(t *testing.T) {
 }
 
 func TestKataStatusRouteDefaultUsesConfig(t *testing.T) {
-	tests := []struct {
-		name      string
-		pgURL     string
-		wantState kata.State
-		wantReady bool
-	}{
-		{name: "standalone_is_hub", wantState: kata.StateReady, wantReady: true},
-		{name: "pusher_is_not_hub", pgURL: "postgres://pg.example.test/agentsview", wantState: kata.StateNotHub},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			s := katatest.New(t)
-			te := setup(t, func(c *config.Config) {
-				c.PG = config.PGConfig{URL: tt.pgURL}
-				c.Kata = config.KataConfig{Enabled: true, Endpoint: s.Endpoint(), Project: "agentsview", Actor: "agentsview", Timeout: time.Second}
-			})
-			w := te.get(t, "/api/v1/kata/status")
-			assertStatus(t, w, http.StatusOK)
-			require.Equal(t, tt.wantState, decode[kata.Status](t, w).State)
-			w = te.get(t, "/api/v1/version")
-			assert.Equal(t, tt.wantReady, decode[server.VersionInfo](t, w).KataAvailable)
-			assert.Equal(t, tt.wantReady, len(s.Requests()) > 0, "a pusher never contacts Kata")
+	t.Run("standalone_is_hub", func(t *testing.T) {
+		s := katatest.New(t)
+		te := setup(t, func(c *config.Config) {
+			c.Kata = config.KataConfig{Enabled: true, Endpoint: s.Endpoint(), Project: "agentsview", Actor: "agentsview", Timeout: time.Second}
 		})
-	}
+		w := te.get(t, "/api/v1/kata/status")
+		assertStatus(t, w, http.StatusOK)
+		require.Equal(t, kata.StateReady, decode[kata.Status](t, w).State)
+		w = te.get(t, "/api/v1/version")
+		assert.True(t, decode[server.VersionInfo](t, w).KataAvailable)
+	})
 }
 
 func TestKataStatusRouteReprobes(t *testing.T) {

@@ -1950,7 +1950,6 @@ func (p *codexProvider) parseSessionWithCursor(
 func (p *codexProvider) parentTurnResolver(
 	ctx context.Context, childPath string,
 ) codexParentTurnResolver {
-	ctx = p.parentInventoryContext(ctx)
 	return func(parentID string) (map[string]struct{}, bool) {
 		var paths []string
 		hasOriginal := false
@@ -2008,13 +2007,6 @@ func (p *codexProvider) parentTurnResolver(
 		p.parentTurnCache.Put(files, turnIDs)
 		return turnIDs, true
 	}
-}
-
-func (p *codexProvider) parentInventoryContext(ctx context.Context) context.Context {
-	if !p.Config.StableSourceSnapshots {
-		return ctx
-	}
-	return context.WithValue(ctx, codexThreadInventoryContextKey{}, &codexThreadInventoryBatch{stable: true})
 }
 
 // CodexReplayParentID returns the explicit parent only when the rollout has a
@@ -2208,7 +2200,7 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 			// A writer may leave its final JSON record incomplete while the
 			// session is live. Count terminated malformed records, and count an
 			// unterminated tail only when the caller owns a stable snapshot.
-			if lr.terminated || p.Config.StableSourceSnapshots {
+			if lr.terminated {
 				malformedLines++
 			}
 			continue

@@ -24,19 +24,14 @@ func commandMoves() []commandMove {
 		{"sync", "source sync", newSyncCommand, "agentsview source sync --full"},
 		{"import", "source import", newImportCommand, "agentsview source import --type chatgpt export.json\nagentsview source import --type claude-ai --sync"},
 		{"chrome", "source chrome", newChromeCommand, "agentsview source chrome setup"},
-		{"raw-sync", "source raw", newRawSyncCommand, "agentsview source raw status"},
 		{"projects", "project list", newProjectsCommand, "agentsview project list --json"},
 		{"health", "session health", newHealthCommand, "agentsview session health --limit 10 --json"},
 		{"prune", "session prune", newPruneCommand, "agentsview session prune --project scratch --dry-run"},
 		{"stats", "report stats", newStatsCommand, "agentsview report stats --json"},
 		{"activity", "report activity", newActivityReportCommand, "agentsview report activity --preset week"},
 		{"usage", "report usage", newReportUsageCommand, "agentsview report usage daily --no-sync"},
-		{"pg", "replica pg", newPGCommand, "agentsview replica pg status"},
-		{"duckdb", "replica duckdb", newDuckDBCommand, "agentsview replica duckdb status"},
-		{"clickhouse", "replica clickhouse", newClickHouseCommand, "agentsview replica clickhouse status"},
 		{"embeddings", "index embeddings", newEmbeddingsCommand, "agentsview index embeddings list"},
 		{"classifier", "index classifier", newClassifierCommand, "agentsview index classifier rebuild"},
-		{"parse-diff", "archive diff", newParseDiffCommand, "agentsview archive diff --agent claude --limit 10"},
 	}
 }
 

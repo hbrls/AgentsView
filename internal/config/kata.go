@@ -93,21 +93,6 @@ func isLoopbackHost(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// HasPGPushTarget reports whether any resolved PostgreSQL target has a URL.
-// Failed target resolution counts as a target so hub eligibility fails closed.
-func (c *Config) HasPGPushTarget() bool {
-	targets, err := c.ResolvePGTargets()
-	if err != nil {
-		return true
-	}
-	for _, target := range targets {
-		if strings.TrimSpace(target.Config.URL) != "" {
-			return true
-		}
-	}
-	return false
-}
-
 // mergeKataTOML keeps defaults for keys omitted from the file.
 func mergeKataTOML(dst *KataConfig, src KataConfig, meta toml.MetaData) {
 	if meta.IsDefined("kata", "enabled") {

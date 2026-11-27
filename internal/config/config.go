@@ -920,48 +920,42 @@ type Config struct {
 	CodexCloud CodexCloudConfig `json:"-" toml:"-"`
 	// ClaudeAI is the organizations setting of [agents.claude-ai], read
 	// from config.toml only.
-	ClaudeAI             ClaudeAIConfig              `json:"-" toml:"-"`
-	Host                 string                      `json:"host" toml:"host"`
-	Port                 int                         `json:"port" toml:"port"`
-	ChartPalette         ChartPalette                `json:"chart_palette" toml:"chart_palette"`
-	ZoomLevel            *ZoomLevel                  `json:"zoom_level,omitempty" toml:"zoom_level,omitempty"`
-	DataDir              string                      `json:"data_dir" toml:"data_dir"`
-	DBPath               string                      `json:"-" toml:"-"`
-	PublicURL            string                      `json:"public_url,omitempty" toml:"public_url"`
-	PublicOrigins        []string                    `json:"public_origins,omitempty" toml:"public_origins"`
-	Proxy                ProxyConfig                 `json:"proxy,omitempty" toml:"proxy"`
-	WatchExcludePatterns []string                    `json:"watch_exclude_patterns,omitempty" toml:"watch_exclude_patterns"`
-	DisabledAgents       []parser.AgentType          `json:"disabled_agents,omitempty" toml:"disabled_agents"`
-	CursorSecret         string                      `json:"cursor_secret" toml:"cursor_secret"`
-	CursorAdminAPIKey    string                      `json:"cursor_admin_api_key,omitempty" toml:"cursor_admin_api_key"`
-	CursorAdminEmail     string                      `json:"cursor_admin_email,omitempty" toml:"cursor_admin_email"`
-	CursorAdminUserID    string                      `json:"cursor_admin_user_id,omitempty" toml:"cursor_admin_user_id"`
-	GithubToken          string                      `json:"github_token,omitempty" toml:"github_token"`
-	Terminal             TerminalConfig              `json:"terminal,omitempty" toml:"terminal"`
-	AuthToken            string                      `json:"auth_token,omitempty" toml:"auth_token"`
-	RequireAuth          bool                        `json:"require_auth" toml:"require_auth"`
-	NoBrowser            bool                        `json:"no_browser" toml:"no_browser"`
-	DisableUpdateCheck   bool                        `json:"disable_update_check" toml:"disable_update_check"`
-	PersistentDaemon     bool                        `json:"-" toml:"-"`
-	NoSync               bool                        `json:"-" toml:"-"`
-	SkipInitialSync      bool                        `json:"-" toml:"-"`
-	ArchiveContent       ArchiveContent              `json:"archive_content" toml:"archive_content"`
-	PG                   PGConfig                    `json:"pg,omitempty" toml:"pg"`
-	DefaultPG            string                      `json:"default_pg,omitempty" toml:"default_pg"`
-	PGTargets            map[string]PGConfig         `json:"-" toml:"-"`
-	ClickHouse           ClickHouseConfig            `json:"clickhouse,omitempty" toml:"clickhouse"`
-	DefaultClickHouse    string                      `json:"default_clickhouse,omitempty" toml:"default_clickhouse"`
-	ClickHouseTargets    map[string]ClickHouseConfig `json:"-" toml:"-"`
-	Vector               VectorConfig                `json:"vector,omitempty" toml:"vector"`
-	Recall               RecallConfig                `json:"recall,omitempty" toml:"recall"`
-	ImageText            ImageTextConfig             `json:"image_text,omitempty" toml:"image_text"`
-	Integrations         IntegrationsConfig          `json:"integrations,omitempty" toml:"integrations"`
-	Insights             InsightsConfig              `json:"insights,omitempty" toml:"insights"`
-	Kata                 KataConfig                  `json:"-" toml:"kata"`
-	Friction             FrictionConfig              `json:"friction,omitempty" toml:"friction"`
-	Automated            AutomatedConfig             `json:"automated,omitempty" toml:"automated"`
-	Agent                map[string]AgentConfig      `json:"agent,omitempty" toml:"agent"`
-	WriteTimeout         time.Duration               `json:"-" toml:"-"`
+	ClaudeAI             ClaudeAIConfig         `json:"-" toml:"-"`
+	Host                 string                 `json:"host" toml:"host"`
+	Port                 int                    `json:"port" toml:"port"`
+	ChartPalette         ChartPalette           `json:"chart_palette" toml:"chart_palette"`
+	ZoomLevel            *ZoomLevel             `json:"zoom_level,omitempty" toml:"zoom_level,omitempty"`
+	DataDir              string                 `json:"data_dir" toml:"data_dir"`
+	DBPath               string                 `json:"-" toml:"-"`
+	PublicURL            string                 `json:"public_url,omitempty" toml:"public_url"`
+	PublicOrigins        []string               `json:"public_origins,omitempty" toml:"public_origins"`
+	Proxy                ProxyConfig            `json:"proxy,omitempty" toml:"proxy"`
+	WatchExcludePatterns []string               `json:"watch_exclude_patterns,omitempty" toml:"watch_exclude_patterns"`
+	DisabledAgents       []parser.AgentType     `json:"disabled_agents,omitempty" toml:"disabled_agents"`
+	CursorSecret         string                 `json:"cursor_secret" toml:"cursor_secret"`
+	CursorAdminAPIKey    string                 `json:"cursor_admin_api_key,omitempty" toml:"cursor_admin_api_key"`
+	CursorAdminEmail     string                 `json:"cursor_admin_email,omitempty" toml:"cursor_admin_email"`
+	CursorAdminUserID    string                 `json:"cursor_admin_user_id,omitempty" toml:"cursor_admin_user_id"`
+	GithubToken          string                 `json:"github_token,omitempty" toml:"github_token"`
+	Terminal             TerminalConfig         `json:"terminal,omitempty" toml:"terminal"`
+	AuthToken            string                 `json:"auth_token,omitempty" toml:"auth_token"`
+	RequireAuth          bool                   `json:"require_auth" toml:"require_auth"`
+	NoBrowser            bool                   `json:"no_browser" toml:"no_browser"`
+	DisableUpdateCheck   bool                   `json:"disable_update_check" toml:"disable_update_check"`
+	PersistentDaemon     bool                   `json:"-" toml:"-"`
+	NoSync               bool                   `json:"-" toml:"-"`
+	SkipInitialSync      bool                   `json:"-" toml:"-"`
+	ArchiveContent       ArchiveContent         `json:"archive_content" toml:"archive_content"`
+	Vector               VectorConfig           `json:"vector,omitempty" toml:"vector"`
+	Recall               RecallConfig           `json:"recall,omitempty" toml:"recall"`
+	ImageText            ImageTextConfig        `json:"image_text,omitempty" toml:"image_text"`
+	Integrations         IntegrationsConfig     `json:"integrations,omitempty" toml:"integrations"`
+	Insights             InsightsConfig         `json:"insights,omitempty" toml:"insights"`
+	Kata                 KataConfig             `json:"-" toml:"kata"`
+	Friction             FrictionConfig         `json:"friction,omitempty" toml:"friction"`
+	Automated            AutomatedConfig        `json:"automated,omitempty" toml:"automated"`
+	Agent                map[string]AgentConfig `json:"agent,omitempty" toml:"agent"`
+	WriteTimeout         time.Duration          `json:"-" toml:"-"`
 	// InstallationID identifies this data directory independently of its label.
 	InstallationID string `json:"-" toml:"-"`
 	// InstallationCreatedAt is when InstallationID was created, or zero for
@@ -1038,6 +1032,8 @@ type Config struct {
 	HostExplicit bool `json:"-" toml:"-"`
 	// PortExplicit is true when the user passed --port on the CLI.
 	PortExplicit bool `json:"-" toml:"-"`
+
+	validationScope ValidationScope
 }
 
 type configJSON Config
@@ -1221,8 +1217,8 @@ func Default() (Config, error) {
 		WatchExcludePatterns:           []string{".git", "node_modules", "__pycache__", ".venv", "venv", "vendor", ".next", "*.lock*"},
 		ResultContentBlockedCategories: []string{"Read", "Glob"},
 		EventsCoalesceInterval:         10 * time.Second,
-		DaemonIdleTimeout:              20 * time.Minute,
-		SyncIdleAfter:                  10 * time.Minute,
+		DaemonIdleTimeout:              5 * time.Minute,
+		SyncIdleAfter:                  5 * time.Minute,
 		SyncInterval:                   5 * time.Second,
 		Agent:                          map[string]AgentConfig{},
 		CodexCloud:                     defaultCodexCloudConfig(),
@@ -1632,6 +1628,8 @@ func (c *Config) applyConfigTOML(data string) error {
 		Agent                          map[string]AgentConfig `toml:"agent"`
 		EventsCoalesceInterval         time.Duration          `toml:"events_coalesce_interval"`
 		DaemonIdleTimeout              time.Duration          `toml:"daemon_idle_timeout"`
+		SyncInterval                   time.Duration          `toml:"sync_interval"`
+		SyncIdleAfter                  time.Duration          `toml:"sync_idle_after"`
 		SessionSources                 []sessionSourceConfig  `toml:"session_sources"`
 		ModelAliases                   map[string]string      `toml:"model_aliases"`
 	}
@@ -1644,15 +1642,10 @@ func (c *Config) applyConfigTOML(data string) error {
 			return fmt.Errorf("unknown archive source setting %s", key.String())
 		}
 	}
-	c.ArchiveSources = file.ArchiveSources
-	if err := c.ValidateArchiveSources(); err != nil {
-		return err
-	}
 	if meta.IsDefined("vector") {
 		if err := rejectUnknownVectorKeys(meta); err != nil {
 			return err
 		}
-		c.vectorSectionDefined = true
 	}
 	if file.ZoomLevel != nil {
 		if err := c.validateSection(ScopeServer, "zoom_level", file.ZoomLevel.Validate); err != nil {

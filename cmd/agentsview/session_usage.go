@@ -22,6 +22,8 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/requestsign"
 	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/servicehttp"
@@ -219,6 +221,38 @@ func requireRemoteSubagentUsageSupport(
 	return nil
 }
 
+func httpSessionSyncStatus(
+	ctx context.Context, baseURL, token string,
+) (startupPending, archiveStale bool, err error) {
+	client, err := requestsign.ClientFromEnvironment(baseURL, sessionUsageHTTPClient)
+	if err != nil {
+		return false, false, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(baseURL, "/")+"/api/v1/sync/status", nil)
+	if err != nil {
+		return false, false, err
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	response, err := client.Do(req)
+	if err != nil {
+		return false, false, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return false, false, fmt.Errorf("sync status: HTTP %d", response.StatusCode)
+	}
+	var status struct {
+		StartupPending bool `json:"startup_pending"`
+		ArchiveStale   bool `json:"archive_stale"`
+	}
+	if err := json.UnmarshalRead(response.Body, &status); err != nil {
+		return false, false, err
+	}
+	return status.StartupPending, status.ArchiveStale, nil
+}
+
 func readOnlySessionUsageDaemonError(url string) error {
 	return fmt.Errorf(
 		"daemon at %s is read-only; stop it to refresh local "+
@@ -246,7 +280,7 @@ func httpSessionUsageData(
 		if query.OwnOnly || query.NoSync {
 			return nil, tokenUseExitNotFound, nil
 		}
-		startupPending, archiveStale, syncPending, statusErr := httpSessionSyncStatus(
+		startupPending, archiveStale, statusErr := httpSessionSyncStatus(
 			ctx, baseURL, token,
 		)
 		if statusErr != nil {
@@ -254,7 +288,7 @@ func httpSessionUsageData(
 				"checking sync status: %w", statusErr,
 			)
 		}
-		if startupPending || archiveStale || syncPending {
+		if startupPending || archiveStale {
 			return nil, tokenUseExitErr, errors.New(
 				"session usage is not yet available; retry after startup ingestion " +
 					"or archive catch-up finishes",

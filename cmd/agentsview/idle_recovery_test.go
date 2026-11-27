@@ -280,7 +280,7 @@ func TestIdleManualWakeRunsOneFullPass(t *testing.T) {
 		stats, _, err := runForegroundWorkerSyncPass(ctx, t.Context(), cfg, engine, database, lock, nil)
 		return stats, err
 	})
-	ts := serveIngestionArchive(t, cfg, database, engine, ingestion, server.WithLocalSyncRunner(ingestion.foregroundSync(withAttachedSources(ingestion.attached, runner))))
+	ts := serveIngestionArchive(t, cfg, database, engine, ingestion, server.WithLocalSyncRunner(ingestion.foregroundSync(runner)))
 	client, err := apiclient.NewHTTPClient(ts.URL, "", ts.Client())
 	require.NoError(t, err)
 	request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, ts.URL+"/api/v1/sync", nil)

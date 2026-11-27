@@ -3198,9 +3198,6 @@ func (db *DB) migrateColumns(ctx context.Context, progress OpenProgressFunc) err
 	if err := addDialogueIsContent(ctx, w, progress); err != nil {
 		return err
 	}
-	if _, err := w.ExecContext(ctx, artifactSessionQueueTriggerCreatesSQL); err != nil {
-		return fmt.Errorf("installing artifact session queue triggers: %w", err)
-	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}

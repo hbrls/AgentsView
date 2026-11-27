@@ -45,7 +45,6 @@ func TestStructuredParsersRetainDialogueProjection(t *testing.T) {
 		{"openhands-message", AgentOpenHands},
 		{"openhands-action", AgentOpenHands},
 		{"cursor", AgentCursor},
-		{"claude", AgentClaude},
 		{"iflow", AgentIflow},
 		{"pi", AgentPi},
 	} {
@@ -64,9 +63,6 @@ func TestStructuredParsersRetainDialogueProjection(t *testing.T) {
 				provider, ok := NewProvider(tc.agent, ProviderConfig{Roots: []string{root}, Machine: "local"})
 				require.True(t, ok)
 				var opaque any = JSONLSource{Root: root, Path: path}
-				if tc.agent == AgentClaude {
-					opaque = MaterializedFileSource{Path: path}
-				}
 				outcome, err := provider.Parse(t.Context(), ParseRequest{Source: SourceRef{Provider: tc.agent, DisplayPath: path, Opaque: opaque}})
 				require.NoError(t, err)
 				require.Len(t, outcome.Results, 1)

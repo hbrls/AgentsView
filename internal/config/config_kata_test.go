@@ -88,28 +88,6 @@ func TestKataConfigTOMLFinalizeRejectsHTTPSWithoutToken(t *testing.T) {
 }
 
 func TestKataEnabledOnPusherIsNotAConfigError(t *testing.T) {
-	cfg := loadMinimalWithConfig(t, map[string]any{"pg": map[string]any{"url": "postgres://pg.example.test/agentsview"}, "kata": map[string]any{"enabled": true, "endpoint": "unix:///tmp/k.sock"}})
+	cfg := loadMinimalWithConfig(t, map[string]any{"kata": map[string]any{"enabled": true, "endpoint": "unix:///tmp/k.sock"}})
 	assert.True(t, cfg.Kata.Enabled)
-	assert.True(t, cfg.HasPGPushTarget())
-}
-
-func TestHasPGPushTarget(t *testing.T) {
-	t.Setenv("AGENTSVIEW_PG_URL", "")
-	tests := []struct {
-		name string
-		data map[string]any
-		want bool
-	}{
-		{name: "no_pg", data: map[string]any{}, want: false},
-		{name: "pg_section_without_url", data: map[string]any{"pg": map[string]any{"schema": "x"}}, want: false},
-		{name: "legacy_url", data: map[string]any{"pg": map[string]any{"url": "postgres://pg.example.test/a"}}, want: true},
-		{name: "named_url", data: map[string]any{"pg": map[string]any{"work": map[string]any{"url": "postgres://pg.example.test/a"}}}, want: true},
-		{name: "unresolvable_named_target", data: map[string]any{"default_pg": "missing", "pg": map[string]any{"work": map[string]any{"url": "postgres://pg.example.test/a"}}}, want: true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg := loadMinimalWithConfig(t, tt.data)
-			assert.Equal(t, tt.want, cfg.HasPGPushTarget())
-		})
-	}
 }

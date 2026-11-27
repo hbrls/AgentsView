@@ -30,6 +30,7 @@ import (
 	"go.kenn.io/agentsview/internal/insight"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/poller"
+	"go.kenn.io/agentsview/internal/power"
 	"go.kenn.io/agentsview/internal/recall/extract"
 	"go.kenn.io/agentsview/internal/secrets"
 	"go.kenn.io/agentsview/internal/server"
@@ -82,9 +83,6 @@ func main() {
 			os.Exit(1)
 		}
 		return
-	}
-	if handled, code := rawderive.RunParserChild(os.Args[1:]); handled {
-		os.Exit(code)
 	}
 	// Turn on the agentsview-test-fixture deny-list before any scan
 	// runs. The secrets package keeps the filter off by default so unit
@@ -300,11 +298,8 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		// The engine disables every provider for an archive-only database and
 		// carries stored sessions forward without accessing receiving-host roots.
 		preserve := sync.NewEngine(ctx, database, sync.EngineConfig{Ephemeral: true, ArchiveContent: cfg.ArchiveContent})
-		stats, err := preserve.ResyncAllWithOptions(ctx, nil, sync.RebuildOptions{})
+		stats := preserve.ResyncAll(ctx, nil)
 		preserve.Close()
-		if err != nil {
-			fatal("preserving archive after parser upgrade: %v", err)
-		}
 		if !stats.ArchiveRebuilt {
 			fatal("preserving archive after parser upgrade: rebuild aborted")
 		}
@@ -500,7 +495,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		}
 		go startPeriodicSync(
 			ctx, cfg, ingestion, engine, database, writeLock, idleTracker,
-			validRemotes, emitter, attachedSources,
+			emitter,
 		)
 	} else if opts.ReloadConfig != nil {
 		// Without a background engine the server reconfigures its own
@@ -592,10 +587,6 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	if rtOpts.BasePath != "" {
 		srvOpts = append(srvOpts, server.WithBasePath(rtOpts.BasePath))
 	}
-	if ingestion != nil {
-		srvOpts = append(srvOpts, server.WithSyncIntervalOverride(ingestion.SyncIntervalOverride()))
-	}
-	srvOpts = append(srvOpts, pushBackendOptions()...)
 	if !cfg.ArchiveContent.UsageOnly() && !database.ArchiveContent().UsageOnly() {
 		srvOpts = append(srvOpts, vectorServe.ServerOptions()...)
 	}
@@ -612,10 +603,10 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	}
 	if engine != nil {
 		srvOpts = append(srvOpts, server.WithLocalSyncRunner(
-			ingestion.foregroundSync(withAttachedSources(attachedSources, newForegroundSyncRunner(ctx, cfg, engine, database, writeLock))),
+			ingestion.foregroundSync(newForegroundSyncRunner(ctx, cfg, engine, database, writeLock)),
 		))
 		srvOpts = append(srvOpts, server.WithLocalResyncRunner(
-			server.LocalResyncRunner(ingestion.foregroundSync(withAttachedSources(attachedSources, server.LocalSyncRunner(newForegroundResyncRunner(ctx, cfg, engine, database))))),
+			server.LocalResyncRunner(ingestion.foregroundSync(server.LocalSyncRunner(newForegroundResyncRunner(ctx, cfg, engine, database)))),
 		))
 	}
 	if engine != nil {
@@ -3176,15 +3167,6 @@ func startPeriodicSync(
 	idleTracker *server.IdleTracker,
 	emitter sync.Emitter,
 ) {
-	if validRemotes {
-		for _, rh := range cfg.RemoteHosts {
-			if rh.Interval > 0 {
-				go startRemoteHostSync(
-					ctx, cfg, database, engine, rh, emitter, idleTracker,
-				)
-			}
-		}
-	}
 
 	ticker := time.NewTicker(periodicSyncInterval)
 	defer ticker.Stop()
@@ -3204,10 +3186,6 @@ func startPeriodicSync(
 			// availability changes.
 			current := ingestion.Config()
 			runScheduledSyncPass(ctx, engine, scheduledReconcileTargets(current))
-			runRemoteSourceSyncPass(ctx, engine, remoteSourceSyncRoots(current))
-			if _, err := attachedSources.DrainScheduled(ctx); err != nil && ctx.Err() == nil {
-				log.Printf("archive sources: %v", err)
-			}
 			recomputePendingSessions(ctx, engine, database)
 			engine.ReconcileCommitTrailers(ctx)
 			recomputeStaleFriction(ctx, engine)

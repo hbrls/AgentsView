@@ -138,7 +138,7 @@ func TestOpenInterpreterProviderFindsArchivedRollout(t *testing.T) {
 
 // TestOpenInterpreterProviderKeepsCodexOnlySurfaces covers the Codex-only
 // surfaces the shared provider keeps from forks: session_index.jsonl watches
-// and fan-out, the S3 archive layout, and raw capture.
+// and fan-out.
 func TestOpenInterpreterProviderKeepsCodexOnlySurfaces(t *testing.T) {
 	base := filepath.Join(t.TempDir(), ".openinterpreter")
 	root := filepath.Join(base, "sessions")
@@ -167,11 +167,6 @@ func TestOpenInterpreterProviderKeepsCodexOnlySurfaces(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Empty(t, sources, "index events must not fan out for a fork")
-
-	assert.False(t, AgentSupportsS3Discovery(AgentInterpreter))
-	_, ok = S3ProviderFor(AgentInterpreter)
-	assert.False(t, ok)
-	assert.Equal(t, RawCaptureCapabilities{}, provider.Capabilities().RawCapture)
 }
 
 // TestRelabelCodexResultAsOpenInterpreter covers the subagent links the Codex

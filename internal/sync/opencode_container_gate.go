@@ -11,6 +11,7 @@ import (
 	"maps"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -389,7 +390,7 @@ type sqliteContainerVerification struct {
 // pass leaves the record revoked. Reads use the reader; a write transaction
 // opens only when some record still holds authority to consume.
 func (e *Engine) prepareSQLiteContainerVerification(ctx context.Context, states map[string]parser.SQLiteContainerState) error {
-	if len(states) == 0 || e.db == nil || e.ephemeral || e.db.ReadOnly() || e.pathRewriter != nil {
+	if len(states) == 0 || e.db == nil || e.ephemeral || e.db.ReadOnly() {
 		return nil
 	}
 	records, consumable, err := loadSQLiteContainerVerifications(states, func(key string) (string, error) {
@@ -557,7 +558,7 @@ func (e *Engine) filterQuickSyncFiles(
 		f, dbPath := candidate.file, candidate.container
 		if cursor == nil || container != dbPath || agent != f.Agent {
 			agent, container, pageFailed = f.Agent, dbPath, false
-			cursor = parser.NewStoredMemberFreshnessCursor(e.storedMemberFreshnessPager(dbPath, e.idPrefix+string(f.Agent)+":", func(row db.VirtualContainerMemberFreshness) (int64, bool) {
+			cursor = parser.NewStoredMemberFreshnessCursor(e.storedMemberFreshnessPager(dbPath, string(f.Agent)+":", func(row db.VirtualContainerMemberFreshness) (int64, bool) {
 				return row.MTimeNS, row.Agent == string(f.Agent) && providerSourceMetadataFresh(row)
 			}))
 		}
@@ -572,7 +573,7 @@ func (e *Engine) filterQuickSyncFiles(
 			}
 		}
 		if found && !pageFailed && f.ProviderSource != nil &&
-			!e.forceParseRequested(f) && e.pathRewriter == nil && e.sqliteContainerPassCaptureValid(dbPath) {
+			!e.forceParseRequested(f) && e.sqliteContainerPassCaptureValid(dbPath) {
 			fingerprint, complete := parser.OpenCodeCompositeFingerprint(*f.ProviderSource)
 			if row.Suppressed || (complete && fingerprint.MTimeNS != 0 && providerFingerprintMatchesStored(f.Agent, fingerprint, 0, row.CoveredThroughNS, row.FingerprintHash, true)) {
 				e.noteSQLiteContainerResult(f.Path, true)
@@ -1010,7 +1011,7 @@ func (e *Engine) finishSQLiteContainerPass(ctx context.Context, incomplete, full
 	verifiedAt := openCodeContainerDigestVerifyNow()
 	var discovered map[string]int
 	defer func() {
-		if (len(records) == 0 && discovered == nil) || e.db == nil || e.ephemeral || e.db.ReadOnly() || e.pathRewriter != nil {
+		if (len(records) == 0 && discovered == nil) || e.db == nil || e.ephemeral || e.db.ReadOnly() {
 			return
 		}
 		err := e.db.Update(ctx, func(tx *sql.Tx) error {

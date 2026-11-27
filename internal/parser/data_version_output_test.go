@@ -109,9 +109,6 @@ func parsedOutputRows(t *testing.T, agent parser.AgentType) map[string]string {
 	}))
 	provider, ok := parser.NewProvider(agent, parser.ProviderConfig{
 		Roots: []string{root}, Machine: "digest",
-		PathRewriter: func(path string) string {
-			return strings.ReplaceAll(filepath.ToSlash(path), filepath.ToSlash(normalRoot), "/digest")
-		},
 	})
 	require.True(t, ok)
 	sources, err := provider.Discover(t.Context())

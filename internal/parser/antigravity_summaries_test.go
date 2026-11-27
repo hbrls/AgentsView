@@ -169,12 +169,6 @@ func TestAntigravityProviderSummaryResolutionStates(t *testing.T) {
 
 func TestAntigravityProviderMarksRemoteWorkspace(t *testing.T) {
 	tests := map[string]func(string) ProviderConfig{
-		"path rewriter": func(root string) ProviderConfig {
-			return ProviderConfig{
-				Roots: []string{root}, Machine: "localbox",
-				PathRewriter: func(path string) string { return "remote:" + path },
-			}
-		},
 		"foreign source machine": func(root string) ProviderConfig {
 			return ProviderConfig{
 				Roots: []string{root}, Machine: "localbox",

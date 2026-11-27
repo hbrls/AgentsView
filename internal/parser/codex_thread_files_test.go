@@ -112,21 +112,6 @@ func TestCodexForkInventoryCompletionChecksOnlyUsedParents(t *testing.T) {
 	}
 }
 
-func TestCodexMaterializedForkDoesNotTrackTemporaryRoot(t *testing.T) {
-	factory, cfg, source := codexForkInventoryFixture(t, 0)
-	source.Opaque = MaterializedFileSource{Path: source.Opaque.(codexSource).Path}
-	ctx := WithCodexParentInventoryBatch(t.Context())
-	out, err := factory.NewProvider(cfg).Parse(ctx, ParseRequest{Source: source})
-	require.NoError(t, err)
-	require.Len(t, out.Results, 1)
-	require.Equal(t, DataVersionCurrent, out.Results[0].DataVersion)
-	require.Len(t, out.Results[0].Result.Messages, 1)
-	require.NoError(t, os.RemoveAll(cfg.Roots[0]))
-	affected, err := ValidateCodexParentInventoryBatch(ctx)
-	require.NoError(t, err)
-	assert.Empty(t, affected, "materialization cleanup must not create retry work")
-}
-
 func TestCodexForkInventoryChangedDayDoesNotScanOtherDays(t *testing.T) {
 	var allocations []float64
 	for _, files := range []int{10, 1000} {

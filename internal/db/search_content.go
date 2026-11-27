@@ -1398,9 +1398,9 @@ func LexicalEventAnchorJoinSQL(scope string) string {
 // be absent for orphan result events, which inherit only session lineage.
 func LexicalAnchorScopeSQL(f ContentSearchFilter, sessionAlias, anchorAlias string, dialect QueryDialect) string {
 	if f.Scope != "top" && f.Scope != "subordinate" {
-		return dialect.TrueLiteral()
+		return dialect.trueLiteral
 	}
-	predicate := "(" + SubordinateSessionSQL(sessionAlias) + " OR COALESCE(" + anchorAlias + ".is_sidechain, " + dialect.FalseLiteral() + "))"
+	predicate := "(" + SubordinateSessionSQL(sessionAlias) + " OR COALESCE(" + anchorAlias + ".is_sidechain, " + dialect.falseLiteral + "))"
 	if f.Scope == "top" {
 		return "NOT " + predicate
 	}

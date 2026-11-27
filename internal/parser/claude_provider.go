@@ -56,6 +56,50 @@ func (p *claudeProvider) DiscoverEach(ctx context.Context, yield func(SourceRef)
 	return p.sources.DiscoverEach(ctx, yield)
 }
 
+func (p *claudeProvider) DiscoverScopesEach(ctx context.Context, scopes []ReconciliationScope, yield func(SourceRef) error) error {
+	paths := make(map[string][]string)
+	for _, scope := range scopes {
+		for _, root := range scope.TraversalRoots {
+			for _, proof := range scope.PhysicalProofScopes {
+				paths[root] = append(paths[root], filepath.Clean(proof.Path))
+			}
+		}
+	}
+	var incomplete error
+	emit := func(source SourceRef) error {
+		if err := yield(source); err != nil {
+			return discoveryYieldError{cause: err}
+		}
+		return nil
+	}
+	for _, root := range slices.Sorted(maps.Keys(paths)) {
+		slices.Sort(paths[root])
+		var covered []string
+		for _, path := range paths[root] {
+			if slices.ContainsFunc(covered, func(parent string) bool {
+				return reconciliationScopeWithinOrSame(path, parent)
+			}) {
+				continue
+			}
+			covered = append(covered, path)
+			var err error
+			if reconciliationScopeSamePath(cleanReconciliationScopeRoot(root), cleanReconciliationScopeRoot(path)) {
+				err = p.sources.discoverEachRoot(ctx, root, emit)
+			} else {
+				err = p.sources.streamLocalSubtree(ctx, root, path, true, yield)
+			}
+			if cause, ok := discoveryYieldCause(err); ok {
+				return cause
+			}
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			incomplete = errors.Join(incomplete, err)
+		}
+	}
+	return incomplete
+}
+
 func (p *claudeProvider) WatchPlan(ctx context.Context) (WatchPlan, error) {
 	return p.sources.WatchPlan(ctx)
 }
@@ -132,9 +176,8 @@ func (p *claudeProvider) Parse(
 	project := claudeProviderProject(ctx, req.Source.ProjectHint, path)
 
 	opts := claudeParseOptions{
-		siblingLineage:              claudeSourceIsProjectLevel(req.Source, path),
-		persistedOutputPathResolver: persistedOutputPathResolver,
-		aiTitleFallback:             true,
+		siblingLineage:  claudeSourceIsProjectLevel(req.Source, path),
+		aiTitleFallback: true,
 	}
 	results, excludedIDs, err := claudeParseFile(ctx, path, project, machine, opts)
 	if err != nil {

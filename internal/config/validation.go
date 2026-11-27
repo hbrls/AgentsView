@@ -16,8 +16,6 @@ const (
 	ScopeVector
 	ScopeRecall
 	ScopeInsights
-	ScopePG
-	ScopeClickHouse
 	ScopeDeployment
 	ScopeDocbank
 )
@@ -53,9 +51,6 @@ func (c *Config) validateSections() error {
 		{ScopeServer, "[image_text]", c.ImageText.Validate},
 		{ScopeServer, "[friction]", c.Friction.Validate},
 		{ScopeServer, "[kata]", c.Kata.Validate},
-		{ScopePG, "[pg]", func() error { return c.pgConfigErr }},
-		{ScopeClickHouse, "[clickhouse]", func() error { return c.clickHouseConfigErr }},
-		{ScopeDocbank, "[integrations.docbank]", c.Integrations.Docbank.Validate},
 	} {
 		if err := c.validateSection(section.scope, section.name, section.validate); err != nil {
 			return err

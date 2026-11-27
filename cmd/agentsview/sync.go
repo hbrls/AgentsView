@@ -35,19 +35,13 @@ type SyncConfig struct {
 }
 
 func runSync(ctx context.Context, cfg SyncConfig) {
-	if doSync(ctx, cfg) {
-		os.Exit(1)
-	}
+	doSync(ctx, cfg)
 }
 
-// doSync performs the sync run and reports whether any configured
-// remote host failed. It owns the deferred cleanup (profile stop,
-// db close) so runSync can translate the result into a non-zero
+// doSync performs the sync run. It owns the deferred cleanup (profile
+// stop, db close) so runSync can translate the result into a non-zero
 // exit code without skipping that cleanup.
-func doSync(ctx context.Context, cfg SyncConfig) (hadRemoteFailures bool) {
-	if err := validateArtifactSyncConfig(cfg); err != nil {
-		fatal("%v", err)
-	}
+func doSync(ctx context.Context, cfg SyncConfig) {
 	appCfg, err := config.LoadMinimalFor(config.ScopeLocal)
 	if err != nil {
 		fatal("loading config: %v", err)
@@ -77,10 +71,9 @@ func doSync(ctx context.Context, cfg SyncConfig) (hadRemoteFailures bool) {
 			operation = "full sync"
 		}
 		fmt.Printf("Preparing %s...\n", operation)
-		// The follow-up daemon request performs local work only when
-		// includeLocal is true. A remote-only request still needs a newly
-		// launched daemon to populate its existing local archive at startup.
-		appCfg.SkipInitialSync = includeLocal
+		// A newly launched daemon still needs to populate the existing
+		// local archive at startup.
+		appCfg.SkipInitialSync = true
 		tr, err := ensureTransportContext(
 			ctx, &appCfg, transportIntentArchiveWrite, 0,
 		)
@@ -132,7 +125,7 @@ func doSync(ctx context.Context, cfg SyncConfig) (hadRemoteFailures bool) {
 					fatal("daemon sync: %v", err)
 				}
 				printSyncSummary(stats, start)
-				return false
+				return
 			}
 		}
 		if tr.DirectReadOnly {
@@ -149,56 +142,7 @@ func doSync(ctx context.Context, cfg SyncConfig) (hadRemoteFailures bool) {
 	}
 	defer closeWriteDB(database, writeLock)
 
-	if cfg.Host != "" {
-		if err := runRemoteSyncOnce(ctx, appCfg, database, remoteHosts[0], cfg.Full); err != nil {
-			reportRemoteFailures([]remoteHostFailure{{Host: remoteHosts[0], Err: err}})
-			return true
-		}
-		return false
-	}
-
-	if len(appCfg.RemoteHosts) == 0 {
-		if cfg.Target == "" {
-			runLocalSync(ctx, appCfg, database, cfg.Full)
-		} else {
-			result, err := runLocalAndArtifactFolderSync(
-				ctx, appCfg, database, cfg,
-			)
-			if err != nil {
-				fatal("local sync before artifact exchange: %v", err)
-			}
-			printArtifactSyncSummary(os.Stdout, result)
-		}
-		return false
-	}
-	progress := newRemoteProgressPrinter(os.Stdout, time.Now)
-	_, failures, blocked := runConfiguredLocalAndRemotesCLI(
-		ctx, appCfg, database, appCfg.RemoteHosts,
-		cfg.Full, progress.Print,
-	)
-	progress.Finish()
-	reportRemoteFailures(failures)
-	if blocked != nil {
-		if _, ok := errors.AsType[*remotesync.PendingCleanupError](blocked); ok {
-			log.Printf("remote HTTP sync blocked by pending cleanup: %v", blocked)
-			fmt.Fprintf(os.Stderr,
-				"sync: remote HTTP cleanup remains pending: %s\n",
-				remotesync.FailureSummary(blocked),
-			)
-			return true
-		}
-		fatal("local sync: %v", blocked)
-	}
-	if cfg.Target != "" {
-		result, err := runArtifactFolderSync(
-			ctx, appCfg, database, cfg,
-		)
-		if err != nil {
-			fatal("%v", err)
-		}
-		printArtifactSyncSummary(os.Stdout, result)
-	}
-	return len(failures) > 0
+	runLocalSync(ctx, appCfg, database, cfg.Full)
 }
 
 func useDaemonForSync(tr transport) bool {
@@ -295,12 +239,6 @@ func coordinateLocalSync(
 	engine.PhaseStats().Log("sync")
 	if err != nil {
 		return didResync, stats, err
-	}
-	if stats.Aborted && !fallbackOnAbort {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return didResync, stats, ctxErr
-		}
-		return didResync, stats, errUnifiedRebuildAborted
 	}
 	if !stats.ProcessingCompleteOrRetrying() {
 		return didResync, stats, errors.New("local sync processing incomplete")

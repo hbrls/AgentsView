@@ -27,8 +27,6 @@ const (
 // table schemas.
 type QueryDialect struct {
 	position           func(haystack, needle string) string
-	parentRelation     func(childAlias, parentAlias string) string
-	machinePredicate   func(sessionIDExpr, machineExpr string, placeholders []string) string
 	name               string
 	placeholderStyle   placeholderStyle
 	trueLiteral        string
@@ -59,11 +57,30 @@ type QueryDialect struct {
 }
 
 func (d QueryDialect) recursiveChildJoinSQL() string {
-	if d.recursiveChildJoin == "" {
-		return "FROM sessions s JOIN tree t ON "
-	}
-	return d.recursiveChildJoin
+	return "FROM sessions s JOIN tree t ON "
 }
+
+// Position renders substring position syntax and panics for unsupported dialects.
+func (d QueryDialect) Position(haystack, needle string) string {
+	if d.position == nil {
+		panic("SQL position is unsupported for dialect " + d.name)
+	}
+	return d.position(haystack, needle)
+}
+
+func (d QueryDialect) TrueLiteral() string  { return d.trueLiteral }
+func (d QueryDialect) FalseLiteral() string { return d.falseLiteral }
+
+// SignedAggregate keeps mirror aggregate counts scannable as Go integers.
+func (d QueryDialect) SignedAggregate(expr string) string {
+	if d.signedWindowCounts {
+		return "toInt64(" + expr + ")"
+	}
+	return expr
+}
+
+// RecursiveUnionSQL returns the union operator supported by recursive CTEs.
+func (d QueryDialect) RecursiveUnionSQL() string { return "UNION" }
 
 func (d QueryDialect) starredPredicateSQL(idExpr string) string {
 	return "EXISTS (SELECT 1 FROM starred_sessions ss WHERE ss.session_id = " +
@@ -73,17 +90,11 @@ func (d QueryDialect) starredPredicateSQL(idExpr string) string {
 func (d QueryDialect) labelPredicateSQL(
 	q func(string) string, ph string,
 ) string {
-	if d.labelPredicate != nil {
-		return d.labelPredicate(q, ph)
-	}
 	return "EXISTS (SELECT 1 FROM session_labels sl WHERE sl.session_id = " +
 		q("id") + " AND sl.label = " + ph + ")"
 }
 
 func (d QueryDialect) prLinkPredicateSQL(col, repoPh, numPh, hostPh string) string {
-	if d.prLinkPredicate != nil {
-		return d.prLinkPredicate(col, repoPh, numPh, hostPh)
-	}
 	pred := "EXISTS (SELECT 1 FROM json_each(NULLIF(" + col + ", '')) pl WHERE 1=1"
 	if repoPh != "" {
 		pred += " AND lower(json_extract(pl.value, '$.repository')) = " + repoPh
@@ -98,10 +109,6 @@ func (d QueryDialect) prLinkPredicateSQL(col, repoPh, numPh, hostPh string) stri
 }
 
 func (d QueryDialect) orphanPredicateSQL(sessionAlias, parentAlias string) string {
-	if d.parentRelation != nil {
-		return "NOT EXISTS (SELECT 1 FROM sessions " + parentAlias + " WHERE " +
-			d.ParentRelation(sessionAlias, parentAlias) + ")"
-	}
 	return SidebarOrphanPredicate(sessionAlias, parentAlias)
 }
 
@@ -116,11 +123,13 @@ func outerSessionID(q func(string) string) string {
 // SQLiteQueryDialect returns the SQLite SQL fragments used by the local store.
 func SQLiteQueryDialect() QueryDialect {
 	return QueryDialect{
-		name:               "sqlite",
-		placeholderStyle:   placeholderQuestion,
-		trueLiteral:        "1",
-		falseLiteral:       "0",
-		recursiveChildJoin: "FROM tree t CROSS JOIN sessions s ON ",
+		name:             "sqlite",
+		placeholderStyle: placeholderQuestion,
+		trueLiteral:      "1",
+		falseLiteral:     "0",
+		position: func(haystack, needle string) string {
+			return "instr(" + haystack + ", " + needle + ")"
+		},
 		dateStartExpr: func(q func(string) string) string {
 			return "julianday(COALESCE(NULLIF(" + q("started_at") +
 				", ''), " + q("created_at") + "))"
@@ -424,45 +433,12 @@ func SidebarOrphanPredicate(sessionAlias, parentAlias string) string {
 		)`
 }
 
-func (d QueryDialect) WithParentRelation(relation func(string, string) string) QueryDialect {
-	d.parentRelation = relation
-	return d
-}
-
-// WithOrphanPredicate overrides the missing-parent test when a query already
-// provides resolved parent edges.
-func (d QueryDialect) WithOrphanPredicate(predicate func(string, string) string) QueryDialect {
-	d.orphanPredicate = predicate
-	return d
-}
-
-// WithMachinePredicate overrides machine membership without multiplying session
-// rows. Ordinary archives and replicas compare the scalar machine column.
-func (d QueryDialect) WithMachinePredicate(predicate func(string, string, []string) string) QueryDialect {
-	d.machinePredicate = predicate
-	return d
-}
-
-// MachinePredicate renders a machine filter for one session. The session ID
-// expression lets a backend match several contributing sources with EXISTS.
+// MachinePredicate renders a machine filter for one session.
 func (b *QueryBuilder) MachinePredicate(sessionIDExpr, machineExpr string, values []string) string {
-	if b.dialect.machinePredicate == nil {
-		return inPredicate(machineExpr, values, b)
-	}
-	if len(values) == 0 {
-		return "1 = 0"
-	}
-	placeholders := make([]string, len(values))
-	for i, value := range values {
-		placeholders[i] = b.Add(value)
-	}
-	return b.dialect.machinePredicate(sessionIDExpr, machineExpr, placeholders)
+	return inPredicate(machineExpr, values, b)
 }
 
 func (d QueryDialect) ParentRelation(child, parent string) string {
-	if d.parentRelation != nil {
-		return d.parentRelation(child, parent)
-	}
 	return child + ".parent_session_id = " + parent + ".id"
 }
 
@@ -555,7 +531,7 @@ func buildSessionFilterWithBuilder(
 		" WHERE root_session.message_count > 0" +
 		" AND root_session.deleted_at IS NULL AND " +
 		rootMatch +
-		" " + b.dialect.RecursiveUnionSQL() + " " +
+		" UNION " +
 		"SELECT s.id " + b.dialect.recursiveChildJoinSQL() + b.dialect.ParentRelation("s", "t") +
 		" WHERE " + SessionTreeMemberPredicate(f, b.dialect, "s") +
 		") SELECT id FROM tree"
@@ -762,7 +738,7 @@ func annotationTreePredicate(
 		"SELECT annotated_session.id FROM sessions annotated_session" +
 		" WHERE " + SessionTreeMemberPredicate(f, b.dialect, "annotated_session") +
 		" AND " + strings.Join(preds, " AND ") +
-		" " + b.dialect.RecursiveUnionSQL() + " " +
+		" UNION " +
 		"SELECT annotated_parent.id FROM sessions annotated_parent" +
 		" JOIN sessions annotated_child ON " +
 		b.dialect.ParentRelation("annotated_child", "annotated_parent") +

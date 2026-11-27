@@ -9,7 +9,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"go.kenn.io/agentsview/internal/archivesource"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/server"
@@ -34,11 +33,10 @@ type daemonIngestion struct {
 	load func() (config.Config, error)
 
 	cfg atomic.Pointer[config.Config]
+
 	// syncInterval is shared by every watcher generation, so a shorter
 	// interval requested by the server survives provider reloads.
 	syncInterval agentsync.IntervalOverride
-	// attached drains configured archive sources during an idle catch-up.
-	attached *archivesource.Manager
 
 	// applyMu serializes reloads. Each reload reads the saved configuration
 	// under it, so the last one to run applies the latest settings.
@@ -312,9 +310,6 @@ func (d *daemonIngestion) resume(done chan struct{}, finish func()) {
 	if err == nil {
 		if !stats.ProcessingComplete() {
 			log.Printf("idle catch-up incomplete: %d failed, aborted=%v", stats.Failed, stats.Aborted)
-		}
-		if d.attached != nil {
-			_, err = d.attached.DrainScheduled(d.ctx)
 		}
 	}
 	if err != nil {

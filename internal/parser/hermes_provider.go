@@ -254,9 +254,7 @@ func (p *hermesProvider) Parse(
 	path := src.Path
 	defer func() {
 		sourcePath := firstNonEmptyJSONLString(src.StateDB, path)
-		if p.Config.PathRewriter != nil {
-			sourcePath = p.Config.PathRewriter(sourcePath)
-		} else if absolute, err := filepath.Abs(sourcePath); err == nil {
+		if absolute, err := filepath.Abs(sourcePath); err == nil {
 			sourcePath = absolute
 		}
 		sourcePath = strings.ReplaceAll(sourcePath, `\`, "/")

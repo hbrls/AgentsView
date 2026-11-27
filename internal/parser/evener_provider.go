@@ -22,7 +22,7 @@ func newEvenerProviderFactory(def AgentDef) ProviderFactory {
 			WithFileLookup(evenerFindFile),
 			WithFileFingerprint(evenerFingerprintSource),
 			WithFileParse(evenerParseFile),
-		), remote: cfg.PathRewriter != nil}
+		)}
 	})
 }
 

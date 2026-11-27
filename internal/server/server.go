@@ -28,7 +28,6 @@ import (
 	"go.kenn.io/agentsview/internal/codexcloud"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/friction/filing"
 	"go.kenn.io/agentsview/internal/friction/review"
 	"go.kenn.io/agentsview/internal/insight"
 	"go.kenn.io/agentsview/internal/kata"
@@ -94,10 +93,8 @@ const (
 	defaultInsightLogStopWaitTimeout = 500 * time.Millisecond
 	defaultHTTPReadTimeout           = 10 * time.Second
 	corsAllowedRequestHeaders        = "Content-Type, Authorization, " +
-		service.SemanticSearchIntentHeader + ", " + rawSyncDeviceIDHeader +
-		", " + rawSyncUploadOffsetHeader
-	corsExposedResponseHeaders = rawSyncUploadOffsetHeader + ", " +
-		rawSyncUploadLengthHeader + ", " + rawSyncUploadCompleteHeader + ", Location, " + apiclient.ArchiveStaleHeader
+		service.SemanticSearchIntentHeader
+	corsExposedResponseHeaders = "Location, " + apiclient.ArchiveStaleHeader
 )
 
 // Server is the HTTP server that serves the SPA and REST API.
@@ -112,8 +109,6 @@ type Server struct {
 	settingsApplyMu   gosync.Mutex
 	// onDemandReconfigureMu serializes source updates to onDemandEngine.
 	onDemandReconfigureMu gosync.Mutex
-	// pushTurn lets one archive push run at a time.
-	pushTurn              pushTurn
 	db                    db.Store
 	activityReports       *activityReportCache
 	assetCache            *assetCache
@@ -130,6 +125,7 @@ type Server struct {
 	startupProbeKey       []byte
 	version               VersionInfo
 	chrome                chromeHost
+	codexCloudStatus      *codexcloud.StatusBoard
 	dataDir               string
 
 	// baseCtx, when set, is used as the base context for all
@@ -192,15 +188,6 @@ type Server struct {
 	// startup because vectors.write.lock was held).
 	embeddingsUnavailableReason string
 
-	// vectorPushSource, when set, supplies the local vectors.db active
-	// generation to the daemon's pg push handler. Nil leaves the vector
-	// push phase skipped, e.g. when [vector] is disabled.
-	vectorPushSource storage.VectorPushSource
-
-	// replicas and mirror are the push backends registered by the
-	// composition root; each gets a daemon push route.
-	replicas []storage.Replica
-
 	// localSyncRunner, when set, backs the foreground local-sync HTTP handler
 	// with the worker-backed pass instead of running SyncThenRun in process.
 	localSyncRunner LocalSyncRunner
@@ -215,6 +202,22 @@ type Server struct {
 
 	// telemetryCapture receives UI telemetry events; nil leaves the route unregistered.
 	telemetryCapture http.Handler
+
+	// constructed is set when New returns; see WithFriction.
+	constructed bool
+
+	// frictionRunner, when set, backs the Friction Log endpoints; nil
+	// leaves the feature reported unavailable.
+	frictionRunner *review.Runner
+	// The friction job runs its automatic filing passes sequentially.
+	frictionEvaluatedOccurrences map[string]time.Time
+	// frictionExclusive, when set, serializes digest work with the daemon's
+	// background scheduler; nil allows unsynchronized runs.
+	frictionExclusive func(func() error) error
+
+	// kata, when set, is the shared Kata connection; the server builds one
+	// from [kata] config when the composition root does not supply one.
+	kata *kata.Conn
 
 	ensurePricing func(context.Context, *db.DB) error
 }
@@ -290,10 +293,10 @@ func New(
 		opt(s)
 	}
 	if s.kata == nil {
-		// Only a local SQLite archive with no PG push target is its own hub.
-		// pg serve passes its own hub Conn; read-only replicas are not hubs.
+		// Only a local SQLite archive is its own hub; read-only replicas
+		// are not hubs.
 		_, local := database.(*db.DB)
-		hub := local && filing.EligibleHost(false, cfg.HasPGPushTarget())
+		hub := local
 		s.kata = kata.NewConn(kata.ConfigFrom(cfg.Kata, hub))
 	}
 	eligibility := "disabled"

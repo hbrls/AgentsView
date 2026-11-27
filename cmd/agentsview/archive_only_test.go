@@ -4,14 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json/v2"
-	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,9 +16,6 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/rawcheckpoint"
-	"go.kenn.io/agentsview/internal/storage"
-	syncpkg "go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
@@ -54,87 +47,6 @@ func TestArchiveOnlyRefusesReceivingHostOnRestart(t *testing.T) {
 		var out bytes.Buffer
 		err := runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: mode}, &out)
 		assert.ErrorContains(t, err, "archive-only", mode)
-	}
-}
-
-func TestRawSyncRejectsUnreadableArchive(t *testing.T) {
-	for _, primary := range []string{"directory", "corrupt", "missing-pending", "corrupt-pending"} {
-		for _, command := range []string{"watch", "backfill"} {
-			t.Run(primary+"/"+command, func(t *testing.T) {
-				cfg := testConfigWithClaudeFixture(t)
-				if primary == "directory" {
-					require.NoError(t, os.Mkdir(cfg.DBPath, 0o700))
-				} else if primary != "missing-pending" {
-					require.NoError(t, os.WriteFile(cfg.DBPath, []byte("unreadable archive"), 0o600))
-				}
-				if strings.HasSuffix(primary, "pending") {
-					require.NoError(t, os.WriteFile(filepath.Join(cfg.DataDir, "compact-recovery.json"), []byte("interrupted manifest"), 0o600))
-				}
-				err := runRawSyncWithoutHostWork(t, cfg, command)
-				require.Error(t, err)
-				assert.NotErrorIs(t, err, db.ErrArchiveOnly)
-			})
-		}
-	}
-}
-
-func TestRawSyncAllowsAbsentArchive(t *testing.T) {
-	for _, command := range []string{"watch", "backfill"} {
-		t.Run(command, func(t *testing.T) {
-			cfg := testConfigWithClaudeFixture(t)
-			t.Setenv("AGENTSVIEW_DATA_DIR", cfg.DataDir)
-			t.Setenv("AGENTSVIEW_RAW_SYNC_CREDENTIAL", "test-credential")
-			require.NoError(t, os.WriteFile(filepath.Join(cfg.DataDir, "config.toml"), []byte(fmt.Sprintf("[agents.claude]\ndirs = [%q]\n", cfg.AgentDirs[parser.AgentClaude][0])), 0o600))
-			store, err := rawcheckpoint.Open(t.Context(), rawSyncCheckpointPath(cfg.DataDir))
-			require.NoError(t, err)
-			require.NoError(t, store.EnsureDevice(t.Context(), "original-device"))
-			require.NoError(t, store.Close())
-			args := []string{"raw-sync", command, "--server", "http://127.0.0.1:1", "--device-id", "different-device", "--allow-insecure-http"}
-			if command == "backfill" {
-				args = append(args, "--run-id", "test-run", "--provider", "claude")
-			}
-			_, err = executeCommand(newRootCommand(), args...)
-			require.ErrorContains(t, err, "device")
-		})
-	}
-}
-
-func runRawSyncWithoutHostWork(t *testing.T, cfg config.Config, command string) error {
-	t.Helper()
-	t.Setenv("AGENTSVIEW_DATA_DIR", cfg.DataDir)
-	t.Setenv("AGENTSVIEW_RAW_SYNC_CREDENTIAL", "test-credential")
-	require.NoError(t, os.WriteFile(filepath.Join(cfg.DataDir, "config.toml"), []byte(fmt.Sprintf("[agents.claude]\ndirs = [%q]\n", cfg.AgentDirs[parser.AgentClaude][0])), 0o600))
-	var requests atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		requests.Add(1)
-		http.Error(w, "unexpected raw-sync request", http.StatusForbidden)
-	}))
-	defer server.Close()
-	cmd := newRootCommand()
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-	defer cancel()
-	cmd.SetContext(ctx)
-	args := []string{"raw-sync", command, "--server", server.URL, "--device-id", "original-device", "--allow-insecure-http"}
-	if command == "backfill" {
-		args = append(args, "--run-id", "test-run", "--provider", "claude")
-	}
-	_, err := executeCommand(cmd, args...)
-	assert.Zero(t, requests.Load())
-	assert.NoDirExists(t, filepath.Join(cfg.DataDir, "raw-sync"), "rejection must precede captures and checkpoint writes")
-	return err
-}
-
-func TestArchiveOnlyRefusesRawSyncWatch(t *testing.T) {
-	for _, command := range []string{"watch", "backfill"} {
-		t.Run(command, func(t *testing.T) {
-			cfg := testConfigWithClaudeFixture(t)
-			database, err := db.Open(t.Context(), cfg.DBPath)
-			require.NoError(t, err)
-			require.NoError(t, database.EnableArchiveOnly(t.Context()))
-			require.NoError(t, database.Close())
-			err = runRawSyncWithoutHostWork(t, cfg, command)
-			require.ErrorIs(t, err, db.ErrArchiveOnly)
-		})
 	}
 }
 
@@ -248,49 +160,6 @@ func TestArchiveOnlyRefusesOrdinaryImports(t *testing.T) {
 			afterSessions, afterAssets := archiveImportState(t, preserved)
 			assert.Equal(t, beforeSessions, afterSessions, "a preserved archive does not gain or change sessions")
 			assert.Equal(t, beforeAssets, afterAssets, "a preserved archive does not gain or change assets")
-		})
-	}
-}
-
-func TestArchiveOnlyRefusesDaemonPushWatch(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "sessions.db")
-	database, err := db.Open(t.Context(), dbPath)
-	require.NoError(t, err)
-	require.NoError(t, database.EnableArchiveOnly(t.Context()))
-	require.NoError(t, database.Close())
-	for _, tt := range []struct {
-		name string
-		run  func(context.Context, daemonArchiveWriteBackend) error
-	}{
-		{name: "duckdb", run: func(ctx context.Context, b daemonArchiveWriteBackend) error {
-			return b.DuckDBPushWatch(ctx, config.DuckDBConfig{}, DuckDBPushConfig{}, nil, nil, time.Hour, time.Hour)
-		}},
-		{name: "replica", run: func(ctx context.Context, b daemonArchiveWriteBackend) error {
-			return b.ReplicaPushWatch(ctx, pgReplica{}, storage.ConfiguredReplica{}, ReplicaPushConfig{}, nil, nil, time.Hour, time.Hour)
-		}},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			// A watch that starts anyway stops at once instead of running forever.
-			ctx, cancel := context.WithCancel(t.Context())
-			defer cancel()
-			h := newPushWatchOwnerHarness()
-			hooks := h.hooks()
-			startWatcher := hooks.startWatcher
-			hooks.startWatcher = func(
-				cfg config.Config, engine *syncpkg.Engine, callback syncpkg.WatchCallback,
-				options syncpkg.WatcherOptions,
-			) (func(), func(), []string) {
-				cancel()
-				return startWatcher(cfg, engine, callback, options)
-			}
-			err := tt.run(ctx, daemonArchiveWriteBackend{
-				appCfg: config.Config{DBPath: dbPath}, watchHooks: hooks,
-			})
-			require.ErrorIs(t, err, db.ErrArchiveOnly)
-			h.mu.Lock()
-			defer h.mu.Unlock()
-			assert.Empty(t, h.events, "the watch must not collect source roots or push")
-			assert.Empty(t, h.attempts)
 		})
 	}
 }

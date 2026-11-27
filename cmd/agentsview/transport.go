@@ -87,24 +87,6 @@ type customPricingStore interface {
 	SetCustomPricing(map[string]config.CustomModelRate)
 }
 
-var openPGReadStore = func(
-	ctx context.Context,
-	cfg config.Config,
-	pgCfg config.PGConfig,
-) (db.Store, func(), error) {
-	applyClassifierConfig(cfg)
-	backend := pgReplica{}
-	store, err := backend.OpenStore(ctx, postgres.ReplicaTarget(pgCfg))
-	if err != nil {
-		return nil, nil, err
-	}
-	if err := applyRequiredCursorSecret(store, cfg); err != nil {
-		_ = store.Close()
-		return nil, nil, err
-	}
-	return store, func() { _ = store.Close() }, nil
-}
-
 // detectClientTransportContext probes an existing daemon using deployment
 // credentials, without applying unrelated deployment settings or auto-starting.
 // Keep the resolved token in cfg for the API client selected by this probe.
@@ -225,7 +207,7 @@ func ensureTransportContext(
 	}
 	// cfg.NoDaemonAutostart applies the AGENTSVIEW_NO_DAEMON rule to this
 	// invocation only, without touching the process environment.
-	autostartDisabled := daemonAutostartDisabled() || cfg.NoDaemonAutostart || cfg.RequireDaemon
+	autostartDisabled := daemonAutostartDisabled()
 	if (intent == transportIntentRead || intent == transportIntentArchiveWrite) &&
 		waitTimeout <= 0 {
 		waitTimeout = backgroundAutoStartReadyTimeout
@@ -600,33 +582,4 @@ func appendDaemonCompatibilityHint(tr transport, err error) error {
 		return fmt.Errorf("%w\n\n%s", err, staleClientUpgradeHint())
 	}
 	return appendDaemonRestartUpgradeHint(err)
-}
-
-// newPGReadService builds a read-only SessionService over the
-// configured PostgreSQL sync store. It shares the same store
-// construction path as pg serve, but leaves schema repair/migration
-// to pg push/serve because CLI read commands never mutate PG. Like
-// pg serve, it runs the replica vector gate so `session search --pg
-// --semantic|--hybrid` and `mcp --pg` get the same semantic search
-// the SQLite direct path wires via installDirectVectorSearcher.
-func newPGReadService(
-	ctx context.Context, cfg config.Config, pgCfg config.PGConfig,
-) (service.SessionService, func(), error) {
-	store, cleanup, err := openPGReadStore(ctx, cfg, pgCfg)
-	if err != nil {
-		if cleanup != nil {
-			cleanup()
-		}
-		return nil, nil, fmt.Errorf("opening pg store: %w", err)
-	}
-	if len(cfg.CustomModelPricing) > 0 {
-		if priced, ok := store.(customPricingStore); ok {
-			priced.SetCustomPricing(cfg.CustomModelPricing)
-		}
-	}
-	wireReplicaReadVectorSearchFn(ctx, cfg, pgReplica{}, store)
-	return service.NewReadOnlyBackend(
-		store, service.WithModelGroups(service.NewModelGroups(cfg.ModelAliases)),
-		service.WithConfiguredDocbank(cfg),
-	), cleanup, nil
 }

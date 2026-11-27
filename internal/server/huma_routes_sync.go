@@ -45,6 +45,14 @@ type syncInput struct {
 	StartupOnly bool `query:"startup_only" default:"false" doc:"Complete deferred startup ingestion without repeating a completed startup sync"`
 }
 
+func syncErrorPayload(err error) map[string]string {
+	payload := map[string]string{"error": err.Error()}
+	if errors.Is(err, syncpkg.ErrSyncInProgress) {
+		payload["code"] = "sync_running"
+	}
+	return payload
+}
+
 func requireProcessingComplete(stats syncpkg.SyncStats) error {
 	if stats.ProcessingComplete() {
 		return nil
@@ -301,6 +309,19 @@ func (s *Server) runSyncWithResyncFallback(
 	return stats, s.requireArchiveRebuilt()
 }
 
+// requireArchiveRebuilt fails a sync that left the archive stale. When a
+// required rebuild aborts, the sync runners fall back to an incremental pass,
+// so without this check the caller would see success while sessions that need
+// the new parsers stay missing.
+func (s *Server) requireArchiveRebuilt() error {
+	if !s.archiveStale() {
+		return nil
+	}
+	return errors.New("the required archive rebuild did not complete, so " +
+		"sessions that need the new parsers may be missing; check the " +
+		"server log for the reason, then run Sync again")
+}
+
 func (s *Server) humaTriggerResync(
 	ctx context.Context,
 	_ *emptyInput,
@@ -330,6 +351,17 @@ func (s *Server) humaTriggerResync(
 		}
 		stream.SendJSON("done", stats)
 	}}, nil
+}
+
+func (s *Server) runResyncRoute(
+	ctx context.Context, engine *syncpkg.Engine,
+	progress func(syncpkg.Progress),
+) (syncpkg.SyncStats, error) {
+	stats, err := s.runResyncWithFallback(ctx, engine, progress)
+	if err != nil {
+		return stats, err
+	}
+	return stats, s.requireArchiveRebuilt()
 }
 
 func (s *Server) runResyncWithFallback(

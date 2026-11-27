@@ -137,7 +137,7 @@ func (p *antigravityProvider) Parse(
 		// A remote workspace names a folder on another machine, so its
 		// project comes from the path text alone, as for the CLI provider.
 		projectCtx := ctx
-		if req.Source.CwdResolution.State == SourceCwdRemote || p.Config.PathRewriter != nil {
+		if req.Source.CwdResolution.State == SourceCwdRemote {
 			projectCtx = WithoutFilesystemProjectDiscovery(projectCtx)
 		}
 		if normalized := ExtractProjectFromCwdWithBranchContext(projectCtx, project, ""); normalized != "" {
@@ -192,14 +192,12 @@ type antigravitySource struct {
 
 type antigravitySourceSet struct {
 	roots       []string
-	remote      bool
 	remoteRoots map[string]bool
 }
 
 func newAntigravitySourceSet(cfg ProviderConfig) antigravitySourceSet {
 	return antigravitySourceSet{
 		roots:       cleanJSONLRoots(cfg.Roots),
-		remote:      cfg.PathRewriter != nil,
 		remoteRoots: antigravityRemoteRoots(cfg),
 	}
 }
@@ -557,7 +555,7 @@ func (s antigravitySourceSet) newSourceRef(ctx context.Context, src antigravityS
 	summaries := loadAntigravitySummaries(ctx, src.Root)
 	resolution := summaries.cwdResolution(src.ID)
 	project := resolution.Path
-	if s.remote || antigravityRemoteRoot(s.remoteRoots, src.Root) {
+	if antigravityRemoteRoot(s.remoteRoots, src.Root) {
 		project = summaries.byID[src.ID].workspace
 		resolution = SourceCwdResolution{State: SourceCwdRemote}
 	}

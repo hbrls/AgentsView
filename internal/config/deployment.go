@@ -7,14 +7,12 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/BurntSushi/toml"
 	"go.kenn.io/agentsview/internal/pathutil"
 )
 
 // Container deployment modes selected by AGENTSVIEW_MODE.
 const (
-	DeploymentModeServe   = "serve"
-	DeploymentModePGServe = "pg-serve"
+	DeploymentModeServe = "serve"
 )
 
 // deploymentEmbeddingsServer names the embeddings server built from
@@ -23,25 +21,17 @@ const deploymentEmbeddingsServer = "deployment"
 
 // DeploymentMode reports the container deployment mode. set is false when
 // AGENTSVIEW_MODE is unset or blank; then no deployment variable applies.
-// PG_SERVE (1/true/yes/on, any case) selects pg-serve only when set is true.
 func DeploymentMode() (mode string, set bool, err error) {
 	raw := strings.TrimSpace(os.Getenv("AGENTSVIEW_MODE"))
 	if raw == "" {
 		return "", false, nil
 	}
-	switch mode := strings.ToLower(raw); mode {
-	case DeploymentModeServe:
-		if pgServeSelected() {
-			return DeploymentModePGServe, true, nil
-		}
-		return mode, true, nil
-	case DeploymentModePGServe:
-		return mode, true, nil
-	default:
+	if strings.ToLower(raw) != DeploymentModeServe {
 		return "", true, fmt.Errorf(
-			"AGENTSVIEW_MODE must be %q or %q, got %q",
-			DeploymentModeServe, DeploymentModePGServe, raw)
+			"AGENTSVIEW_MODE must be %q, got %q",
+			DeploymentModeServe, raw)
 	}
+	return DeploymentModeServe, true, nil
 }
 
 // deploymentVarsActive reports whether the named deployment variables apply.
@@ -59,15 +49,6 @@ func deploymentVarsActive(names ...string) (bool, error) {
 		}
 	}
 	return false, nil
-}
-
-// pgServeSelected keeps the image's legacy PG_SERVE selector.
-func pgServeSelected() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("PG_SERVE"))) {
-	case "1", "true", "yes", "on":
-		return true
-	}
-	return false
 }
 
 // applyDeploymentEnv runs after the file layer and before explicit flags.
@@ -92,11 +73,7 @@ func (c *Config) applyDeploymentEnv() error {
 	} else if set {
 		c.NoBrowser = v
 	}
-	// PG target resolution applies this; serving rejects a bad value at startup.
-	if _, _, err := lookupEnvBool("AGENTSVIEW_PG_ALLOW_INSECURE"); err != nil {
-		return err
-	}
-	return c.ApplyDeploymentEmbeddings()
+	return nil
 }
 
 // ApplyDeploymentAuth loads the deployment authentication used by listeners
@@ -123,75 +100,6 @@ func (c *Config) ApplyDeploymentAuth() error {
 		}
 		c.AuthToken = token
 	}
-	return nil
-}
-
-// ApplyDeploymentEmbeddings loads only the transport needed by PostgreSQL
-// recipe adoption, without loading listener authentication or network settings.
-// It applies nothing unless AGENTSVIEW_MODE is valid.
-// A [vector] section owns its recipe and servers, so the two never combine.
-func (c *Config) ApplyDeploymentEmbeddings() error {
-	if active, err := deploymentVarsActive(
-		"AGENTSVIEW_EMBEDDINGS_ENDPOINT", "AGENTSVIEW_EMBEDDINGS_API_KEY",
-		"AGENTSVIEW_EMBEDDINGS_API_KEY_FILE",
-		"AGENTSVIEW_EMBEDDINGS_BATCH_SIZE",
-	); err != nil || !active {
-		return err
-	}
-	endpoint, endpointSet := os.LookupEnv("AGENTSVIEW_EMBEDDINGS_ENDPOINT")
-	key, keySet := os.LookupEnv("AGENTSVIEW_EMBEDDINGS_API_KEY")
-	keyPath, keyPathSet := os.LookupEnv("AGENTSVIEW_EMBEDDINGS_API_KEY_FILE")
-	batchSize, batchSet := os.LookupEnv("AGENTSVIEW_EMBEDDINGS_BATCH_SIZE")
-	if !endpointSet && !keySet && !keyPathSet && !batchSet {
-		return nil
-	}
-	if keySet && keyPathSet {
-		return errors.New(
-			"set only one of AGENTSVIEW_EMBEDDINGS_API_KEY and " +
-				"AGENTSVIEW_EMBEDDINGS_API_KEY_FILE")
-	}
-	if c.vectorSectionDefined {
-		return errors.New(
-			"AGENTSVIEW_EMBEDDINGS_* cannot be combined with a [vector] section " +
-				"in config.toml; configure the embeddings server in one place")
-	}
-	endpoint = strings.TrimSpace(endpoint)
-	if endpoint == "" {
-		return errors.New("AGENTSVIEW_EMBEDDINGS_ENDPOINT is required " +
-			"when an AGENTSVIEW_EMBEDDINGS_* variable is set")
-	}
-	servers := normalizedEmbeddingsServers(map[string]VectorEmbeddingsServerConfig{
-		deploymentEmbeddingsServer: {Endpoint: endpoint},
-	}, toml.MetaData{})
-	server := servers[deploymentEmbeddingsServer]
-	if batchSet {
-		var err error
-		server.BatchSize, err = strconv.Atoi(strings.TrimSpace(batchSize))
-		if err != nil {
-			return errors.New("AGENTSVIEW_EMBEDDINGS_BATCH_SIZE must be a positive integer")
-		}
-	}
-	if keySet {
-		key = strings.TrimSpace(key)
-		if key == "" {
-			return errors.New("AGENTSVIEW_EMBEDDINGS_API_KEY must not be blank")
-		}
-		server.apiKey = key
-	}
-	if keyPathSet {
-		fileKey, err := readSecretFile("AGENTSVIEW_EMBEDDINGS_API_KEY_FILE", keyPath)
-		if err != nil {
-			return err
-		}
-		server.apiKey = fileKey
-	}
-	if err := server.validate(deploymentEmbeddingsServer, 0); err != nil {
-		if batchSet {
-			return fmt.Errorf("AGENTSVIEW_EMBEDDINGS_BATCH_SIZE: %w", err)
-		}
-		return err
-	}
-	c.DeploymentEmbeddings = &server
 	return nil
 }
 

@@ -15,9 +15,9 @@ import (
 	"strings"
 	"time"
 
-	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/codexcloud"
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/requestsign"
 	"go.kenn.io/kit/daemon"
 )
 
@@ -215,11 +215,18 @@ func codexCloudStatusLines(ctx context.Context, baseURL, authToken string) []str
 	unavailable := func(reason string) []string {
 		return []string{"  codex-cloud status unavailable: " + reason}
 	}
-	api, err := apiclient.NewHTTPClient(baseURL, authToken, &http.Client{Timeout: codexCloudStatusTimeout})
+	client, err := requestsign.ClientFromEnvironment(baseURL, &http.Client{Timeout: codexCloudStatusTimeout})
 	if err != nil {
 		return unavailable(fmt.Sprintf("the server address %s could not be used.", baseURL))
 	}
-	resp, err := api.GetAPIV1CodexCloudStatusWithResponse(ctx)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(baseURL, "/")+"/api/v1/codex-cloud/status", nil)
+	if err != nil {
+		return unavailable(fmt.Sprintf("the server address %s could not be used.", baseURL))
+	}
+	if authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+authToken)
+	}
+	resp, err := client.Do(req)
 	if resp == nil {
 		if netErr, ok := errors.AsType[net.Error](err); ok && netErr.Timeout() {
 			return unavailable(fmt.Sprintf("the server did not answer within %d seconds. It may be busy; "+
@@ -228,9 +235,7 @@ func codexCloudStatusLines(ctx context.Context, baseURL, authToken string) []str
 		return unavailable("the server could not be reached. It may have just stopped; " +
 			"run `agentsview serve status` again to check.")
 	}
-	if resp.HTTPResponse != nil {
-		defer resp.HTTPResponse.Body.Close()
-	}
+	defer resp.Body.Close()
 	switch resp.StatusCode {
 	case http.StatusOK:
 	case http.StatusNotFound:
@@ -247,7 +252,7 @@ func codexCloudStatusLines(ctx context.Context, baseURL, authToken string) []str
 			"debug.log in its data directory, may say why.", resp.StatusCode))
 	}
 	var rows []codexcloud.HomeStatus
-	if err := json.Unmarshal(resp.Body, &rows); err != nil {
+	if err := json.UnmarshalRead(resp.Body, &rows); err != nil {
 		return unavailable("the server's reply could not be read. " +
 			"The server may run a different AgentsView version than this command; " +
 			"after an upgrade, restart the server so both match.")

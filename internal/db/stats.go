@@ -60,67 +60,6 @@ func (db *DB) FileBackedSessionCount(
 	ctx context.Context,
 ) (int, error) {
 	args := nonSourceBackedAgentArgs()
-	args = append(args, localMachine)
-	seenPrefixes := make(map[string]struct{}, len(excludedIDPrefixes))
-	for _, prefix := range excludedIDPrefixes {
-		if prefix == "" {
-			continue
-		}
-		if _, seen := seenPrefixes[prefix]; seen {
-			continue
-		}
-		seenPrefixes[prefix] = struct{}{}
-		conditions = append(conditions, `substr(id, 1, length(?)) <> ?`)
-		args = append(args, prefix, prefix)
-	}
-	seenAgents := make(map[string]struct{}, len(excludedAgents))
-	for _, exclusion := range excludedAgents {
-		if exclusion.Agent == "" {
-			continue
-		}
-		if _, seen := seenAgents[exclusion.Agent]; seen {
-			continue
-		}
-		seenAgents[exclusion.Agent] = struct{}{}
-		if exclusion.KeepJSONLRows {
-			conditions = append(conditions,
-				`(agent <> ? OR file_path LIKE '%.jsonl')`)
-			args = append(args, exclusion.Agent)
-			continue
-		}
-		conditions = append(conditions, `agent <> ?`)
-		args = append(args, exclusion.Agent)
-	}
-
-	var count int
-	err := db.getReader().QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM sessions
-		 WHERE agent NOT IN (`+nonSourceBackedAgentPlaceholders()+`)
-		 AND `+rootSessionFilter+`
-		 AND `+strings.Join(conditions, "\n AND "),
-		args...,
-	).Scan(&count)
-	if err != nil {
-		return 0, fmt.Errorf(
-			"counting local rebuild-owned file sessions: %w", err,
-		)
-	}
-	return count, nil
-}
-
-func (db *DB) fileBackedSessionCount(
-	ctx context.Context, machine, idPrefix string, scoped bool,
-) (int, error) {
-	machinePredicate := ""
-	args := nonSourceBackedAgentArgs()
-	if scoped {
-		machinePredicate = " AND machine = ?"
-		args = append(args, machine)
-	}
-	if idPrefix != "" {
-		machinePredicate += " AND substr(id, 1, length(?)) = ?"
-		args = append(args, idPrefix, idPrefix)
-	}
 	var count int
 	err := db.getReader().QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM sessions

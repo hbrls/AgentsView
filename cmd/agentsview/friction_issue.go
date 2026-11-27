@@ -131,9 +131,6 @@ func newFrictionUnlinkCommand() *cobra.Command {
 // resolveFrictionIssueTarget follows friction run: --server, else a running
 // (or auto-started) daemon, else the local archive (AGENTSVIEW_NO_DAEMON=1).
 func resolveFrictionIssueTarget(cmd *cobra.Command) (frictionIssueTarget, error) {
-	if pgReadRequested(cmd) {
-		return frictionIssueTarget{}, errors.New("--pg is read-only; file from the hub's daemon or with --server")
-	}
 	if remote, _ := cmd.Flags().GetString("server"); strings.TrimSpace(remote) != "" {
 		token, err := explicitServerToken(cmd)
 		if err != nil {
@@ -155,7 +152,7 @@ func resolveFrictionIssueTarget(cmd *cobra.Command) (frictionIssueTarget, error)
 	if err := cfg.Kata.Validate(); err != nil {
 		return frictionIssueTarget{}, err
 	}
-	conn := kata.NewConn(kata.ConfigFrom(cfg.Kata, filing.EligibleHost(false, cfg.HasPGPushTarget())))
+	conn := kata.NewConn(kata.ConfigFrom(cfg.Kata, true))
 	if err := filing.CheckHub(conn.Config()); err != nil {
 		return frictionIssueTarget{}, err
 	}

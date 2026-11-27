@@ -32,7 +32,6 @@ type liveVectorServing struct {
 	done     chan struct{}
 	setup    server.EmbeddingsSetupStatus
 	reload   func() (config.Config, error)
-	push     *vectorPushSource
 }
 
 func newLiveVectorServing(ctx context.Context, cfg config.Config, database *db.DB, idle *server.IdleTracker, reload func() (config.Config, error)) (*liveVectorServing, error) {
@@ -45,7 +44,6 @@ func newLiveVectorServing(ctx context.Context, cfg config.Config, database *db.D
 	v := &liveVectorServing{
 		serving: serving, cfg: cfg, database: database,
 		ctx: ctx, cancel: cancel, idle: idle, reload: reload,
-		push: &vectorPushSource{cfg: cfg},
 	}
 	v.startSchedulers()
 	return v, nil
@@ -84,7 +82,7 @@ func (v *liveVectorServing) Close() error {
 	if v.serving.Close != nil {
 		err = v.serving.Close()
 	}
-	return errors.Join(err, v.push.Close())
+	return err
 }
 
 func (v *liveVectorServing) Notify(recall bool) {
@@ -117,7 +115,6 @@ func (v *liveVectorServing) Manager(store string) server.EmbeddingsManager {
 func (v *liveVectorServing) ServerOptions() []server.Option {
 	options := []server.Option{
 		server.WithEmbeddingsRuntime(v),
-		server.WithVectorPushSource(v.push),
 		server.WithSessionMutationNotifier(func() { v.Notify(false); v.Notify(true) }),
 		server.WithRecallCorpusMutationNotifier(func() { v.Notify(true) }),
 	}
@@ -142,7 +139,7 @@ func (v *liveVectorServing) SetupStatus(ctx context.Context) (server.EmbeddingsS
 		return status, nil
 	}
 	status.Action = ""
-	if missingManager && cfg.DeploymentEmbeddings == nil {
+	if missingManager {
 		status.Action = "turn-on"
 		var err error
 		cfg.Vector.Embeddings, err = cfg.VectorSetupEmbeddings()
@@ -159,11 +156,6 @@ func (v *liveVectorServing) SetupStatus(ctx context.Context) (server.EmbeddingsS
 
 func embeddingsSetupStatus(ctx context.Context, status server.EmbeddingsSetupStatus, cfg config.Config) (server.EmbeddingsSetupStatus, error) {
 	status.Enabled = cfg.Vector.Enabled
-	if cfg.DeploymentEmbeddings != nil {
-		status.Action = ""
-		status.Provider = "configured"
-		return status, nil
-	}
 	if status.Action == "" && !status.Enabled {
 		status.Action = "turn-on"
 	}
@@ -286,7 +278,6 @@ func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerCon
 		}
 		v.mu.Lock()
 		v.serving, v.cfg = serving, cfg
-		v.push.reconfigure(cfg)
 		if serving.manager == nil {
 			v.mu.Unlock()
 			return errors.New("Another process may be using search. Close it and retry.") //nolint:staticcheck // ST1005: This recovery message appears directly in the UI.

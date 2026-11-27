@@ -180,7 +180,6 @@ type antigravityCLISourceSet struct {
 func newAntigravityCLISourceSet(cfg ProviderConfig) antigravityCLISourceSet {
 	return antigravityCLISourceSet{
 		roots:       cleanJSONLRoots(cfg.Roots),
-		remote:      cfg.PathRewriter != nil,
 		remoteRoots: antigravityRemoteRoots(cfg),
 	}
 }
@@ -691,7 +690,7 @@ func (s antigravityCLISourceSet) newSourceRef(
 ) SourceRef {
 	cwd := normalizeAntigravityCLIWorkspace(workspace)
 	resolution := SourceCwdResolution{}
-	if s.remote || antigravityRemoteRoot(s.remoteRoots, root) {
+	if antigravityRemoteRoot(s.remoteRoots, root) {
 		resolution.State = SourceCwdRemote
 	} else if workspace != "" && cwd == "" {
 		resolution.State = SourceCwdAmbiguous

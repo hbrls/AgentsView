@@ -375,6 +375,8 @@ export * from "./openersResponse.ts";
 export * from "./openRequest.ts";
 export * from "./openSessionResponse.ts";
 export * from "./ordinalsResponse.ts";
+export * from "./parserPRLink.ts";
+export * from "./patchApiV1SessionsByIdLabelsPathParameters.ts";
 export * from "./patchApiV1SessionsByIdRenamePathParameters.ts";
 export * from "./pingInfo.ts";
 export * from "./pinMessageResponse.ts";

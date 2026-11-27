@@ -949,7 +949,7 @@ func writeSessionBatchMetadataTx(ctx context.Context, tx *sql.Tx, queries transa
 		return err
 	}
 	if err := replaceSessionUsageEventsTx(
-		queries, write.Session.ID, write.UsageEvents, false,
+		queries, write.Session.ID, write.UsageEvents,
 	); err != nil {
 		return err
 	}

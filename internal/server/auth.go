@@ -16,6 +16,7 @@ const (
 	// When set to true, host-check and CORS middleware skip
 	// their restrictions.
 	ctxKeyRemoteAuth contextKey = iota
+	ctxKeyRestrictedIngress
 )
 
 // isRemoteAuth returns true if the request was authenticated as a
@@ -102,7 +103,7 @@ func (s *Server) authMiddlewareRequired(next http.Handler, force bool) http.Hand
 		// mark OPTIONS as authenticated so the CORS middleware
 		// allows the preflight for cross-origin clients.
 		if r.Method == http.MethodOptions && !force {
-			if s.isRawSyncOwnAuthPath(r.URL.Path) || authRequired && token != "" {
+			if authRequired && token != "" {
 				ctx := context.WithValue(r.Context(), ctxKeyRemoteAuth, true)
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return

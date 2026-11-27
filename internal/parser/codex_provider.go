@@ -18,13 +18,8 @@ import (
 )
 
 var (
-	_ Provider                          = (*codexProvider)(nil)
-	_ ActivityHintProvider              = (*codexProvider)(nil)
-	_ S3Provider                        = (*codexProvider)(nil)
-	_ RawCaptureProvider                = (*codexProvider)(nil)
-	_ RawCaptureSourceProvider          = (*codexProvider)(nil)
-	_ StreamingRawCaptureSourceProvider = (*codexProvider)(nil)
-	_ ReconciliationSourceResolver      = (*codexProvider)(nil)
+	_ Provider             = (*codexProvider)(nil)
+	_ ActivityHintProvider = (*codexProvider)(nil)
 )
 
 // codexProviderSpec parameterizes the one shared Codex-format provider
@@ -173,6 +168,32 @@ func (p *codexProvider) Discover(ctx context.Context) ([]SourceRef, error) {
 
 func (p *codexProvider) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
 	return p.sources.DiscoverEach(ctx, yield)
+}
+
+// SourceForReconciliation allows a rollout restored after discovery to use
+// its plain sibling while retaining the discovered session identity.
+// Only existing files qualify, including when checking for deleted sources.
+func (p *codexProvider) SourceForReconciliation(
+	ctx context.Context, path, _ string,
+) (SourceRef, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return SourceRef{}, false, err
+	}
+	// Reconciliation already ranked this path. Only check its plain sibling;
+	// searching by UUID here repeats discovery for every compressed rollout.
+	if isCompressedCodexRolloutPath(path) && IsRegularFile(codexPlainRolloutPath(path)) {
+		path = codexPlainRolloutPath(path)
+	}
+	for _, root := range p.sources.roots {
+		source, ok := p.sources.sourceRef(root, path, true)
+		if !ok {
+			source, ok = p.sources.directPathSource(root, path, true)
+		}
+		if ok {
+			return source, true, nil
+		}
+	}
+	return SourceRef{}, false, nil
 }
 
 func (p *codexProvider) WatchPlan(ctx context.Context) (WatchPlan, error) {
@@ -383,9 +404,6 @@ func (p *codexProvider) Parse(
 		return ParseOutcome{}, err
 	}
 	// Materialized roots are removed before the engine batch completes.
-	if _, materialized := req.Source.Opaque.(MaterializedFileSource); materialized {
-		ctx = context.WithValue(ctx, codexThreadInventoryContextKey{}, (*codexThreadInventoryBatch)(nil))
-	}
 	path, ok := p.sources.pathFromSource(req.Source)
 	if !ok {
 		return ParseOutcome{}, errors.New("codex source path unavailable")
@@ -462,10 +480,6 @@ func ParseCodexSessionStreaming(
 	source SourceRef,
 	sink CodexSessionSink,
 ) (*ParsedSession, []ParsedMessage, []byte, []byte, string, string, error) {
-	// Materialized roots disappear before the enclosing sync batch completes.
-	if _, materialized := source.Opaque.(MaterializedFileSource); materialized {
-		ctx = context.WithValue(ctx, codexThreadInventoryContextKey{}, (*codexThreadInventoryBatch)(nil))
-	}
 	provider, ok := NewProvider(AgentCodex, cfg)
 	if !ok {
 		return nil, nil, nil, nil, "", "",
@@ -1163,9 +1177,6 @@ func (s codexSourceSet) preferredKnownRolloutSource(
 	for _, root := range s.roots {
 		if err := ctx.Err(); err != nil {
 			return SourceRef{}, err
-		}
-		if isS3URI(root) {
-			continue
 		}
 		for _, relative := range relativePaths {
 			for _, suffix := range []string{"", ".zst"} {
