@@ -126,8 +126,6 @@ func newRootCommand() *cobra.Command {
 	root.AddCommand(newActivityCommand())
 	root.AddCommand(newPGCommand())
 	root.AddCommand(newRawSyncCommand())
-	root.AddCommand(newArchiveCommand())
-	root.AddCommand(newDuckDBCommand())
 	root.AddCommand(newClickHouseCommand())
 	root.AddCommand(newEmbeddingsCommand())
 	root.AddCommand(newSessionCommand())
@@ -304,7 +302,7 @@ func newServeStopCommand() *cobra.Command {
 		Short: "Stop the server, including sync and file watchers",
 		Long: "Stop the server and its background work, including a server started\n" +
 			"by `agentsview daemon start` or automatically by a CLI command.\n\n" +
-			"This also stops read-only PostgreSQL and DuckDB servers for the data\n" +
+			"This also stops read-only PostgreSQL and ClickHouse servers for the data\n" +
 			"directory. Use `agentsview daemon stop` to stop only the writable server.",
 		Example:      "  agentsview serve stop",
 		SilenceUsage: true,
@@ -762,141 +760,6 @@ func newClickHouseCommand() *cobra.Command {
 	return cmd
 }
 
-func newDuckDBCommand() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "duckdb",
-		Short: "DuckDB sync and serve commands",
-		Long: "Build a disposable DuckDB mirror from the persistent SQLite archive, inspect sync status, or serve read-only queries from that mirror. " +
-			"Quack exposes a DuckDB file over its separate remote protocol. " +
-			"Configure the intended path or connection before using these commands.",
-		GroupID:      groupData,
-		SilenceUsage: true,
-		Args:         cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return cmd.Help()
-		},
-	}
-	cmd.AddCommand(newDuckDBPushCommand())
-	cmd.AddCommand(newDuckDBStatusCommand())
-	cmd.AddCommand(newDuckDBServeCommand())
-	cmd.AddCommand(newDuckDBQuackCommand())
-	return cmd
-}
-
-func newDuckDBPushCommand() *cobra.Command {
-	var cfg DuckDBPushConfig
-	cmd := &cobra.Command{
-		Use:          "push",
-		Short:        "Push local data to DuckDB",
-		SilenceUsage: true,
-		Args:         cobra.NoArgs,
-		Run: func(cmd *cobra.Command, args []string) {
-			runDuckDBPush(cmd.Context(), cfg)
-		},
-	}
-	cmd.Flags().BoolVar(&cfg.Full, "full", false, "Force full local resync and DuckDB push")
-	cmd.Flags().StringVar(&cfg.ProjectsFlag, "projects", "", "Comma-separated list of projects to push (inclusive)")
-	cmd.Flags().StringVar(&cfg.ExcludeProjects, "exclude-projects", "", "Comma-separated list of projects to exclude from push")
-	cmd.Flags().BoolVar(&cfg.AllProjects, "all-projects", false, "Ignore configured project filters for this run")
-	cmd.Flags().BoolVar(&cfg.Watch, "watch", false, "Continue watching local files and pushing changes")
-	cmd.Flags().DurationVar(&cfg.Debounce, "debounce", defaultWatchDebounce, "Coalesce window after a change before pushing (--watch only)")
-	cmd.Flags().DurationVar(&cfg.Interval, "interval", defaultWatchInterval, "Periodic floor push interval (--watch only)")
-	return cmd
-}
-
-func newDuckDBStatusCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:          "status",
-		Short:        "Show DuckDB sync status",
-		SilenceUsage: true,
-		Args:         cobra.NoArgs,
-		Run: func(cmd *cobra.Command, args []string) {
-			runDuckDBStatus(cmd.Context())
-		},
-	}
-}
-
-// addPprofFlag registers the hidden --pprof flag shared by every command
-// that serves the web UI and API.
-func addPprofFlag(cmd *cobra.Command, enabled *bool) {
-	cmd.Flags().BoolVar(
-		enabled,
-		"pprof",
-		false,
-		"Serve net/http/pprof under /debug/pprof (developer use)",
-	)
-	_ = cmd.Flags().MarkHidden("pprof")
-}
-
-func newDuckDBServeCommand() *cobra.Command {
-	var pprofEnabled bool
-	cmd := &cobra.Command{
-		Use:          "serve",
-		Short:        "Serve from DuckDB (read-only)",
-		SilenceUsage: true,
-		Args:         cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			appCfg, basePath, err := loadDuckDBServeConfig(cmd)
-			if err != nil {
-				fatal("%v", err)
-			}
-			runDuckDBServe(cmd.Context(), appCfg, basePath, pprofEnabled)
-			return nil
-		},
-	}
-	cmd.Flags().String(
-		"base-path",
-		"",
-		"URL prefix for reverse-proxy subpath (e.g. /agentsview)",
-	)
-	addPprofFlag(cmd, &pprofEnabled)
-	config.RegisterServePFlags(cmd.Flags())
-	return cmd
-}
-
-func newDuckDBQuackCommand() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "quack",
-		Short: "Quack remote protocol commands",
-		Long: "Expose a local DuckDB mirror through the Quack remote protocol. " +
-			"This listener is separate from the AgentsView HTTP API and requires its own configured authentication and bind settings.",
-		Example:      "  agentsview replica duckdb quack serve --help",
-		SilenceUsage: true,
-		Args:         cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return cmd.Help()
-		},
-	}
-	var serveCfg DuckDBQuackServeConfig
-	serveCmd := &cobra.Command{
-		Use:          "serve",
-		Short:        "Expose local DuckDB over Quack",
-		SilenceUsage: true,
-		Args:         cobra.NoArgs,
-		Run: func(cmd *cobra.Command, args []string) {
-			runDuckDBQuackServe(cmd.Context(), serveCfg)
-		},
-	}
-	serveCmd.Flags().StringVar(
-		&serveCfg.Bind, "bind", "quack:127.0.0.1:9494",
-		"Quack bind URI",
-	)
-	serveCmd.Flags().StringVar(
-		&serveCfg.Path, "path", "",
-		"DuckDB mirror path (defaults to [duckdb].path)",
-	)
-	serveCmd.Flags().StringVar(
-		&serveCfg.Token, "token", "",
-		"Quack authentication token (required unless configured)",
-	)
-	serveCmd.Flags().BoolVar(
-		&serveCfg.AllowInsecure, "allow-insecure", false,
-		"Allow non-loopback Quack binding",
-	)
-	cmd.AddCommand(serveCmd)
-	return cmd
-}
-
 func newVersionCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:          "version",
@@ -992,11 +855,6 @@ func writeRootHelp(w io.Writer, root *cobra.Command) {
 	fmt.Fprintln(w, "  AGENTSVIEW_PG_URL       PostgreSQL connection URL for sync")
 	fmt.Fprintln(w, "  AGENTSVIEW_PG_MACHINE   Machine name for PG sync")
 	fmt.Fprintln(w, "  AGENTSVIEW_PG_SCHEMA    PG schema name (default \"agentsview\")")
-	fmt.Fprintln(w, "  AGENTSVIEW_DUCKDB_PATH  DuckDB mirror database path")
-	fmt.Fprintln(w, "  AGENTSVIEW_DUCKDB_URL   Quack connection URL for DuckDB serve")
-	fmt.Fprintln(w, "  AGENTSVIEW_DUCKDB_TOKEN Quack authentication token")
-	fmt.Fprintln(w, "  AGENTSVIEW_DUCKDB_MACHINE")
-	fmt.Fprintln(w, "                          Machine name for DuckDB sync")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Watcher excludes:")
 	fmt.Fprintln(w, "  Add \"watch_exclude_patterns\" to ~/.agentsview/config.toml")
