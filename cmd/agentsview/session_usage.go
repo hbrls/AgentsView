@@ -22,7 +22,6 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
-	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/servicehttp"
@@ -141,9 +140,6 @@ func resolveSessionUsageBackend(cmd *cobra.Command, noSync bool) (*sessionUsageB
 
 	remote, _ := cmd.Flags().GetString("server")
 	if remote != "" {
-		if pgReadRequested(cmd) {
-			return nil, errors.New("--server and --pg are mutually exclusive")
-		}
 		token, err := explicitServerToken(cmd)
 		if err != nil {
 			return nil, err
@@ -166,24 +162,6 @@ func resolveSessionUsageBackend(cmd *cobra.Command, noSync bool) (*sessionUsageB
 	cfg, err := config.LoadPFlagsFor(cmd.Flags(), config.ScopeLocal)
 	if err != nil {
 		return nil, fmt.Errorf("loading config: %w", err)
-	}
-	if pgReadRequested(cmd) {
-		pgCfg, _, err := resolvePGReadConfig(cmd, cfg)
-		if err != nil {
-			return nil, err
-		}
-		store, cleanup, err := openPGReadStore(ctx, cfg, pgCfg)
-		if err != nil {
-			closeArchiveQueryBackend(cleanup)
-			return nil, fmt.Errorf("opening pg store: %w", err)
-		}
-		return &sessionUsageBackend{
-			service: service.NewReadOnlyBackend(store), cleanup: cleanup,
-			read: func(id string) (*sessionUsageOutput, int, error) {
-				query.SessionID = id
-				return storeSessionUsageData(ctx, "pg", cfg, store, query)
-			},
-		}, nil
 	}
 	backend, cleanup, err := resolveArchiveQueryBackendWithConfig(
 		ctx,
@@ -243,8 +221,7 @@ func requireRemoteSubagentUsageSupport(
 
 func readOnlySessionUsageDaemonError(url string) error {
 	return fmt.Errorf(
-		"daemon at %s is read-only; use --pg to query "+
-			"a read-only mirror, or stop it to refresh local "+
+		"daemon at %s is read-only; stop it to refresh local "+
 			"session usage",
 		url,
 	)

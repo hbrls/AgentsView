@@ -1,7 +1,6 @@
 package db
 
 import (
-	"encoding/json/v2"
 	"slices"
 	"sort"
 	"strings"
@@ -107,27 +106,6 @@ func ProjectMatchesPushScope(project string, projects, excludeProjects []string)
 		return false
 	}
 	return !slices.Contains(excludeProjects, project)
-}
-
-// CanonicalPushScope renders the push's project filters as a deterministic
-// string for comparing scopes across pushes. An unfiltered scope returns "",
-// keeping the common case free of JSON.
-func CanonicalPushScope(projects, excludeProjects []string) string {
-	if len(projects) == 0 && len(excludeProjects) == 0 {
-		return ""
-	}
-	scope := struct {
-		Projects []string `json:"projects,omitempty"`
-		Exclude  []string `json:"exclude,omitempty"`
-	}{
-		Projects: SortedCopy(projects),
-		Exclude:  SortedCopy(excludeProjects),
-	}
-	data, err := json.Marshal(scope)
-	if err != nil {
-		return ""
-	}
-	return string(data)
 }
 
 // ProjectIdentityRootKey identifies the root a fallback (empty git_remote)

@@ -123,7 +123,6 @@ func newRootCommand() *cobra.Command {
 	root.AddCommand(newHealthCommand())
 	root.AddCommand(newUsageCommand())
 	root.AddCommand(newActivityCommand())
-	root.AddCommand(newPGCommand())
 	root.AddCommand(newEmbeddingsCommand())
 	root.AddCommand(newSessionCommand())
 	root.AddCommand(newMCPCommand())
@@ -344,7 +343,7 @@ func newOpenAPICommand() *cobra.Command {
 				Version:   version,
 				Commit:    commit,
 				BuildDate: buildDate,
-			}, pushBackendOptions()...)
+			})
 			var data []byte
 			var err error
 			if yamlOutput {
@@ -724,16 +723,6 @@ func newActivityReportCommand() *cobra.Command {
 	registerFormatFlags(cmd.Flags())
 	cmd.Flags().BoolVar(&cfg.NoSync, "no-sync", false, "Skip on-demand sync before querying")
 	cmd.Flags().BoolVar(&cfg.Offline, "offline", false, "Use fallback pricing only")
-	return cmd
-}
-
-func newPGCommand() *cobra.Command {
-	cmd := newReplicaCommand(
-		pgReplica{}, newPGVectorsCommand(), newPGServiceCommand(),
-	)
-	cmd.Long = "Mirror archived SQLite data to PostgreSQL and serve the mirror through a read-only API. " +
-		"Configure a PostgreSQL target before pushing or inspecting status. " +
-		"Mirror reads do not ingest local provider sources."
 	return cmd
 }
 

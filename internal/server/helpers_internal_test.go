@@ -18,7 +18,6 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/postgres"
 	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/sync"
 )
@@ -48,9 +47,7 @@ func testServer(
 		},
 		Machine: "test",
 	})
-	opts = append([]Option{
-		WithReplicas(postgres.Backend{}),
-	}, opts...)
+	opts = append([]Option{}, opts...)
 	return New(cfg, database, engine, opts...)
 }
 
